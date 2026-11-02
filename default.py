@@ -435,7 +435,11 @@ class HDRezkaAddon:
             xbmcplugin.endOfDirectory(self.handle, succeeded=False)
             return
 
-        post_id_match = re.findall(r'id="post_id"\s+value="(\d+)"', html)
+        post_id_match = re.findall(r'id=[\'"]post_id[\'"]\s+value=[\'"](\d+)[\'"]', html)
+        if not post_id_match:
+            post_id_match = re.findall(r'value=[\'"](\d+)[\'"]\s+id=[\'"]post_id[\'"]', html)
+        if not post_id_match:
+            post_id_match = re.findall(r'/(\d+)-[^\/]+\.html', url)
         post_id = post_id_match[0] if post_id_match else None
         
         main_titles = parse_dom(html, "h1")
@@ -454,11 +458,23 @@ class HDRezkaAddon:
                 break
         if active_translator_id == "0" and translators:
             active_translator_id = translators[0]["id"]
+        
+        # If still "0", try to get default translator from initCDNSeriesEvents or initCDNMoviesEvents
+        if active_translator_id == "0":
+            init_s = re.search(r'initCDNSeriesEvents\s*\(\s*\d+\s*,\s*(\d+)', html)
+            init_m = re.search(r'initCDNMoviesEvents\s*\(\s*\d+\s*,\s*(\d+)', html)
+            if init_s:
+                active_translator_id = init_s.group(1)
+            elif init_m:
+                active_translator_id = init_m.group(1)
 
         # Check if TV Series (has seasons / episodes)
-        is_series = bool(parse_dom(html, "div", attrs={"id": "simple-episodes-tabs"}))
-        if not is_series and "sof.tv.initCDNSeriesEvents" in html:
-            is_series = True
+        is_series = (
+            "/series/" in url
+            or "simple-episodes-tabs" in html
+            or "simple-episodes-list" in html
+            or "initCDNSeriesEvents" in html
+        )
 
         if is_series:
             self._handle_series(html, url, post_id, main_title, poster, translators, active_translator_id)
@@ -476,35 +492,71 @@ class HDRezkaAddon:
             if idx >= 0:
                 chosen_tid = translators[idx]["id"]
 
-        # Request stream data
-        headers = {
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": url,
-            "Origin": self.client.base_url
-        }
-        data = {
-            "id": post_id,
-            "translator_id": chosen_tid,
-            "action": "get_movie"
-        }
-        ajax_url = f"{self.client.base_url}/ajax/get_cdn_series/"
+        raw_url = ""
+        subtitles = []
 
-        try:
-            resp_str = self.client.request(ajax_url, data=data, headers=headers)
-            res = json.loads(resp_str)
-        except Exception as e:
-            log(f"Failed to fetch movie stream AJAX: {e}")
-            xbmcgui.Dialog().notification("HDRezka", f"Ошибка получения видео: {e}", self.icon, 3000)
-            xbmcplugin.endOfDirectory(self.handle, succeeded=False)
-            return
+        # If translator is unchanged and page already has embedded streams in HTML, extract directly
+        if chosen_tid == active_translator_id:
+            m_streams = re.search(r'\"streams\":\s*\"([^\"]+)\"', html)
+            if m_streams:
+                raw_url = m_streams.group(1).replace(r"\/", "/")
+                log("Extracted movie streams directly from page HTML")
 
-        raw_url = res.get("url", "")
+        # If not embedded or a different translator was selected, request via AJAX
+        if not raw_url:
+            headers = {
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": url,
+                "Origin": self.client.base_url
+            }
+            data = {
+                "id": post_id,
+                "translator_id": chosen_tid,
+                "action": "get_movie"
+            }
+            ajax_url = f"{self.client.base_url}/ajax/get_cdn_series/"
+
+            try:
+                resp_str = self.client.request(ajax_url, data=data, headers=headers)
+                res = json.loads(resp_str)
+                if not res.get("success"):
+                    msg = res.get("message", "Ошибка получения видео")
+                    log(f"get_movie returned success=False: {msg}")
+                    xbmcgui.Dialog().notification("HDRezka", msg, self.icon, 3000)
+                    xbmcplugin.endOfDirectory(self.handle, succeeded=False)
+                    return
+                raw_url = res.get("url", "")
+                subtitles = parse_subtitles(res)
+            except Exception as e:
+                log(f"Failed to fetch movie stream AJAX: {e}")
+                xbmcgui.Dialog().notification("HDRezka", f"Ошибка получения видео: {e}", self.icon, 3000)
+                xbmcplugin.endOfDirectory(self.handle, succeeded=False)
+                return
+
         links = parse_stream_links(raw_url)
-        subtitles = parse_subtitles(res)
-
         if not links:
             xbmcgui.Dialog().ok("HDRezka", "Не удалось найти ссылки на видео.")
             xbmcplugin.endOfDirectory(self.handle, succeeded=False)
+            return
+
+        # If quality preference is "select" and multiple streams available, list them in the directory
+        if self.quality_pref == "select" and len(links) > 1:
+            for q in sorted(links.keys(), key=lambda k: QUALITY_WEIGHTS.get(k, 0), reverse=True):
+                q_link = links[q]
+                q_title = f"{title} ({q})"
+                q_uri = self.build_uri("play", url=q_link, title=q_title)
+                q_item = xbmcgui.ListItem(q_title)
+                set_video_info(q_item, {"title": q_title, "mediatype": "movie"})
+                set_art(q_item, {"icon": poster, "thumb": poster, "poster": poster, "fanart": self.fanart})
+                q_item.setProperty("IsPlayable", "true")
+                if subtitles:
+                    sub_urls = [s["url"] for s in subtitles if s.get("url")]
+                    if sub_urls:
+                        q_item.setSubtitles(sub_urls)
+                xbmcplugin.addDirectoryItem(self.handle, q_uri, q_item, isFolder=False)
+
+            xbmcplugin.setContent(self.handle, "movies")
+            xbmcplugin.endOfDirectory(self.handle, succeeded=True)
             return
 
         self._choose_quality_and_play(links, title, poster, subtitles)
@@ -539,20 +591,38 @@ class HDRezkaAddon:
             log(f"Failed to fetch episodes AJAX, falling back to page DOM: {e}")
             episodes_html = html
 
-        # Parse episodes
-        li_items = parse_dom(episodes_html, "li")
-        ids = parse_dom(episodes_html, "li", ret="data-id")
-        seasons = parse_dom(episodes_html, "li", ret="data-season_id")
-        episodes_nums = parse_dom(episodes_html, "li", ret="data-episode_id")
-        cdn_urls = parse_dom(episodes_html, "li", ret="data-cdn_url")
+        # Parse all episodes across all seasons
+        episodes = []
+        for m in re.finditer(r'<li\b([^>]*)>(.*?)</li>', episodes_html, re.DOTALL | re.IGNORECASE):
+            attrs_str, content = m.group(1), m.group(2)
+            ep_m = re.search(r'data-episode_id=[\'"](\d+)[\'"]', attrs_str)
+            if not ep_m:
+                continue
+            e_num = ep_m.group(1)
+            s_m = re.search(r'data-season_id=[\'"](\d+)[\'"]', attrs_str)
+            s_num = s_m.group(1) if s_m else "1"
+            id_m = re.search(r'data-id=[\'"](\d+)[\'"]', attrs_str)
+            p_id = id_m.group(1) if id_m else post_id
+            cdn_m = re.search(r'data-cdn_url=[\'"]([^\'"]*)[\'"]', attrs_str)
+            cdn_url = cdn_m.group(1) if cdn_m else ""
+            ep_title = strip_tags(content)
+            episodes.append((s_num, e_num, p_id, ep_title, cdn_url))
 
-        for i in range(len(li_items)):
-            ep_title = strip_tags(li_items[i])
-            s_num = seasons[i] if i < len(seasons) else "1"
-            e_num = episodes_nums[i] if i < len(episodes_nums) else str(i + 1)
-            item_post_id = ids[i] if i < len(ids) else post_id
-            cdn_url = cdn_urls[i] if i < len(cdn_urls) else ""
+        # Fallback if regex didn't find items
+        if not episodes:
+            li_items = parse_dom(episodes_html, "li")
+            ids = parse_dom(episodes_html, "li", ret="data-id")
+            seasons = parse_dom(episodes_html, "li", ret="data-season_id")
+            episodes_nums = parse_dom(episodes_html, "li", ret="data-episode_id")
+            cdn_urls = parse_dom(episodes_html, "li", ret="data-cdn_url")
+            for i in range(len(li_items)):
+                s_num = seasons[i] if i < len(seasons) else "1"
+                e_num = episodes_nums[i] if i < len(episodes_nums) else str(i + 1)
+                p_id = ids[i] if i < len(ids) else post_id
+                cdn_url = cdn_urls[i] if i < len(cdn_urls) else ""
+                episodes.append((s_num, e_num, p_id, strip_tags(li_items[i]), cdn_url))
 
+        for s_num, e_num, item_post_id, ep_title, cdn_url in episodes:
             full_title = f"{main_title} - S{s_num.zfill(2)}E{e_num.zfill(2)} ({ep_title})"
             
             uri = self.build_uri(
@@ -595,6 +665,26 @@ class HDRezkaAddon:
         poster = params.get("image", self.icon)
         data = params.get("data", "")
 
+        # Fallback post_id from url
+        if (not post_id or post_id == "None") and url:
+            id_m = re.search(r'/(\d+)-[^\/]+\.html', url)
+            if id_m:
+                post_id = id_m.group(1)
+
+        # Fallback default translator ID
+        if not idt or idt in ("0", "None"):
+            try:
+                page_html = self.client.request(url)
+                init_m = re.search(r'initCDNSeriesEvents\s*\(\s*\d+\s*,\s*(\d+)', page_html)
+                if init_m:
+                    idt = init_m.group(1)
+                else:
+                    t_list = parse_translators(page_html)
+                    if t_list:
+                        idt = t_list[0]["id"]
+            except Exception as e:
+                log(f"Failed to find translator ID for episode: {e}")
+
         subtitles = []
         if not data or data == "null":
             headers = {
@@ -614,6 +704,11 @@ class HDRezkaAddon:
             try:
                 resp_str = self.client.request(ajax_url, data=req_data, headers=headers)
                 res = json.loads(resp_str)
+                if not res.get("success"):
+                    msg = res.get("message", "Ошибка получения потока")
+                    log(f"get_cdn_series returned success=False: {msg}")
+                    xbmcgui.Dialog().notification("HDRezka", msg, self.icon, 3000)
+                    return
                 data = res.get("url", "")
                 subtitles = parse_subtitles(res)
             except Exception as e:
@@ -634,6 +729,8 @@ class HDRezkaAddon:
         sorted_qualities = sorted(links.keys(), key=lambda q: QUALITY_WEIGHTS.get(q, 0), reverse=True)
         if not sorted_qualities:
             xbmcgui.Dialog().ok("HDRezka", "Потоки недоступны.")
+            if self.handle > 0:
+                xbmcplugin.setResolvedUrl(self.handle, False, xbmcgui.ListItem())
             return
 
         selected_url = None
@@ -653,6 +750,8 @@ class HDRezkaAddon:
                 dialog = xbmcgui.Dialog()
                 idx = dialog.select(self.get_string(30011), sorted_qualities)
                 if idx < 0:
+                    if self.handle > 0:
+                        xbmcplugin.setResolvedUrl(self.handle, False, xbmcgui.ListItem())
                     return
                 selected_url = links[sorted_qualities[idx]]
 
@@ -663,6 +762,8 @@ class HDRezkaAddon:
         Prepares the ListItem with proper headers for Voidboost/CDN and starts playback.
         """
         if not stream_url:
+            if self.handle > 0:
+                xbmcplugin.setResolvedUrl(self.handle, False, xbmcgui.ListItem())
             return
 
         # Append headers required by Voidboost/CDN for playback without 403 blocks
@@ -680,6 +781,16 @@ class HDRezkaAddon:
             item.setLabel(title)
             set_video_info(item, {"title": title})
 
+        # Set MIME type and properties for instant playback without probing
+        if ".m3u8" in stream_url:
+            item.setMimeType("application/vnd.apple.mpegurl")
+            item.setProperty("inputstream", "inputstream.adaptive")
+            item.setProperty("inputstream.adaptive.manifest_type", "hls")
+        else:
+            item.setMimeType("video/mp4")
+
+        item.setContentLookup(False)
+
         # Attach subtitles if available
         if subtitles:
             sub_urls = [s["url"] for s in subtitles if s.get("url")]
@@ -687,7 +798,10 @@ class HDRezkaAddon:
                 log(f"Attaching subtitles: {sub_urls}")
                 item.setSubtitles(sub_urls)
 
-        xbmcplugin.setResolvedUrl(self.handle, succeeded=True, listitem=item)
+        if self.handle > 0:
+            xbmcplugin.setResolvedUrl(self.handle, succeeded=True, listitem=item)
+        else:
+            xbmc.Player().play(playback_url, item)
 
 
 if __name__ == "__main__":

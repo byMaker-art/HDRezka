@@ -126,18 +126,30 @@ class RezkaClient:
         if headers:
             req_headers.update(headers)
 
+        # Sanitize all header values to ensure strict ASCII / Latin-1 compliance
+        clean_headers = {}
+        for k, v in req_headers.items():
+            if isinstance(v, str):
+                try:
+                    v.encode("latin-1")
+                    clean_headers[k] = v
+                except UnicodeEncodeError:
+                    clean_headers[k] = urllib.parse.quote(v, safe=":/%?&=#+@*~,;!-._")
+            else:
+                clean_headers[k] = str(v)
+
         encoded_data = None
         if data is not None:
             if isinstance(data, dict):
                 encoded_data = urllib.parse.urlencode(data).encode("utf-8")
-                if "Content-Type" not in req_headers:
-                    req_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+                if "Content-Type" not in clean_headers:
+                    clean_headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
             elif isinstance(data, str):
                 encoded_data = data.encode("utf-8")
             else:
                 encoded_data = data
 
-        req = urllib.request.Request(url, data=encoded_data, headers=req_headers)
+        req = urllib.request.Request(url, data=encoded_data, headers=clean_headers)
 
         try:
             resp = self.opener.open(req, timeout=30)
@@ -281,7 +293,7 @@ class RezkaClient:
                 f"?id={urllib.parse.quote(challenge_id)}"
                 f"&response={urllib.parse.quote(found_hash)}"
                 f"&nonce={nonce}"
-                f"&redir={urllib.parse.quote(redir_path)}"
+                f"&redir=/"
                 f"&elapsedTime={elapsed_ms}"
             )
 

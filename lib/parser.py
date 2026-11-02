@@ -144,10 +144,14 @@ def parse_stream_links(data_str):
     if not decoded:
         return links
 
-    items = re.findall(r"\[([^\]]+)\](https?://[^\s,\[]+)", decoded)
-    for q, raw_link in items:
-        clean_q = strip_tags(q)
-        options = [u.strip() for u in raw_link.split(" or ") if u.strip()]
+    pattern = r"\[([^\]]+)\]([^\[]+)"
+    matches = re.findall(pattern, decoded)
+    for q, u_str in matches:
+        clean_q = strip_tags(q).strip()
+        u_str = u_str.rstrip(",").strip()
+        options = [u.strip() for u in u_str.split(" or ") if u.strip() and u.strip().startswith("http")]
+        if not options:
+            continue
         best_url = options[0]
         for opt in options:
             if "manifest.m3u8" in opt or opt.endswith(".m3u8"):
@@ -251,7 +255,9 @@ def parse_catalog_items(html_content, base_url):
 
         # Is serial?
         is_serial = False
-        if covers:
+        if "/series/" in raw_url:
+            is_serial = True
+        elif covers:
             spans = parse_dom(covers[0], "span", attrs={"class": "info"})
             if spans:
                 is_serial = True
@@ -297,20 +303,30 @@ def parse_translators(html_content):
                     "active": False,
                     "is_director": False
                 })
+        if not translators:
+            init_m = re.search(r'initCDN(?:Movies|Series)Events\s*\(\s*\d+\s*,\s*(\d+)', html_content)
+            if init_m:
+                translators.append({
+                    "id": init_m.group(1),
+                    "name": "По умолчанию",
+                    "active": True,
+                    "is_director": False
+                })
         return translators
 
     ul_html = ul_match.group(1)
-    items = re.findall(r'<li[^>]*>(.*?)</li>', ul_html, re.DOTALL | re.IGNORECASE)
     seen = {}
-    for item in items:
-        id_m = re.search(r'data-translator_id=[\'"](\d+)[\'"]', item)
+    for m in re.finditer(r'<li\b([^>]*)>(.*?)</li>', ul_html, re.DOTALL | re.IGNORECASE):
+        attrs, content = m.group(1), m.group(2)
+        full_item = attrs + " " + content
+        id_m = re.search(r'data-translator_id=[\'"](\d+)[\'"]', full_item)
         if not id_m:
             continue
         t_id = id_m.group(1)
-        title_m = re.search(r'title=[\'"]([^\'"]+)[\'"]', item)
-        name = title_m.group(1) if title_m else strip_tags(item)
-        is_active = "active" in item
-        is_director = 'data-director="1"' in item or "data-director='1'" in item
+        title_m = re.search(r'title=[\'"]([^\'"]+)[\'"]', full_item)
+        name = title_m.group(1) if title_m else strip_tags(content)
+        is_active = "active" in full_item
+        is_director = 'data-director="1"' in full_item or "data-director='1'" in full_item
         entry = {
             "id": t_id,
             "name": name.strip(),
