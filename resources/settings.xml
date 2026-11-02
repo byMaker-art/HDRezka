@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<settings version="1">
+    <section id="plugin.video.hdrezka.tv">
+        <category id="general" label="30100">
+            <group id="1">
+                <setting id="domain" type="string" label="30101" help="30102">
+                    <default>kinopub.me</default>
+                    <constraints>
+                        <allowempty>false</allowempty>
+                    </constraints>
+                </setting>
+                <setting id="dom_protocol" type="string" label="30103">
+                    <level>0</level>
+                    <default>https</default>
+                    <constraints>
+                        <options>
+                            <option label="HTTPS">https</option>
+                            <option label="HTTP">http</option>
+                        </options>
+                    </constraints>
+                </setting>
+                <setting id="quality" type="string" label="30104">
+                    <level>0</level>
+                    <default>select</default>
+                    <constraints>
+                        <options>
+                            <option label="30105">select</option>
+                            <option label="4K">4K</option>
+                            <option label="2K">2K</option>
+                            <option label="1080p Ultra">1080p Ultra</option>
+                            <option label="1080p">1080p</option>
+                            <option label="720p">720p</option>
+                            <option label="480p">480p</option>
+                            <option label="360p">360p</option>
+                        </options>
+                    </constraints>
+                </setting>
+                <setting id="translator" type="string" label="30106">
+                    <level>0</level>
+                    <default>select</default>
+                    <constraints>
+                        <options>
+                            <option label="30107">select</option>
+                            <option label="30108">default</option>
+                        </options>
+                    </constraints>
+                </setting>
+                <setting id="description" type="boolean" label="30109">
+                    <level>0</level>
+                    <default>true</default>
+                </setting>
+            </group>
+        </category>
+        <category id="account" label="30120">
+            <group id="2">
+                <setting id="auth_enabled" type="boolean" label="30121">
+                    <level>0</level>
+                    <default>false</default>
+                </setting>
+                <setting id="username" type="string" label="30122" enable="eq(-1,true)">
+                    <level>0</level>
+                    <default></default>
+                </setting>
+                <setting id="password" type="string" label="30123" option="hidden" enable="eq(-2,true)">
+                    <level>0</level>
+                    <default></default>
+                </setting>
+                <setting id="login_action" type="action" label="30124" enable="eq(-3,true)">
+                    <level>0</level>
+                    <data>RunPlugin(plugin://plugin.video.hdrezka.tv/?mode=login_action)</data>
+                </setting>
+            </group>
+        </category>
+        <category id="proxy" label="30140">
+            <group id="3">
+                <setting id="use_proxy" type="boolean" label="30141">
+                    <level>0</level>
+                    <default>false</default>
+                </setting>
+                <setting id="protocol" type="string" label="30142" enable="eq(-1,true)">
+                    <level>0</level>
+                    <default>http</default>
+                    <constraints>
+                        <options>
+                            <option label="HTTP / HTTPS">http</option>
+                            <option label="SOCKS5">socks5</option>
+                        </options>
+                    </constraints>
+                </setting>
+                <setting id="proxy_url" type="string" label="30143" help="30144" enable="eq(-2,true)">
+                    <level>0</level>
+                    <default></default>
+                </setting>
+            </group>
+        </category>
+    </section>
+</settings>

@@ -1,0 +1,191 @@
+# Kodi Media Center language file
+# Addon Name: HDRezka
+# Addon id: plugin.video.hdrezka.tv
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: en_GB\n"
+
+# Legacy string IDs for backward compatibility
+msgctxt "#1000"
+msgid "Search"
+msgstr "Search"
+
+msgctxt "#1001"
+msgid "No results found."
+msgstr "No results found."
+
+msgctxt "#1002"
+msgid "Use transliteration in search"
+msgstr "Use transliteration in search"
+
+msgctxt "#1003"
+msgid "Categories"
+msgstr "Categories"
+
+msgctxt "#1004"
+msgid "Next page..."
+msgstr "Next page..."
+
+msgctxt "#1005"
+msgid "Season"
+msgstr "Season"
+
+msgctxt "#1006"
+msgid "Select voiceover / translation"
+msgstr "Select voiceover / translation"
+
+msgctxt "#1007"
+msgid "List"
+msgstr "List"
+
+msgctxt "#1008"
+msgid "Search history"
+msgstr "Search history"
+
+# Addon menu strings
+msgctxt "#30000"
+msgid "Search"
+msgstr "Search"
+
+msgctxt "#30001"
+msgid "Search history"
+msgstr "Search history"
+
+msgctxt "#30002"
+msgid "Categories"
+msgstr "Categories"
+
+msgctxt "#30003"
+msgid "My Bookmarks (HDRezka account)"
+msgstr "My Bookmarks (HDRezka account)"
+
+msgctxt "#30004"
+msgid "Movies"
+msgstr "Movies"
+
+msgctxt "#30005"
+msgid "TV Series"
+msgstr "TV Series"
+
+msgctxt "#30006"
+msgid "Cartoons"
+msgstr "Cartoons"
+
+msgctxt "#30007"
+msgid "Anime"
+msgstr "Anime"
+
+msgctxt "#30008"
+msgid "Collections"
+msgstr "Collections"
+
+msgctxt "#30009"
+msgid "Clear search history"
+msgstr "Clear search history"
+
+msgctxt "#30010"
+msgid "Select voiceover"
+msgstr "Select voiceover"
+
+msgctxt "#30011"
+msgid "Select video quality"
+msgstr "Select video quality"
+
+msgctxt "#30012"
+msgid "Successfully logged in!"
+msgstr "Successfully logged in!"
+
+msgctxt "#30013"
+msgid "Login failed"
+msgstr "Login failed"
+
+msgctxt "#30014"
+msgid "Not logged in. Please verify your login credentials in settings."
+msgstr "Not logged in. Please verify your login credentials in settings."
+
+msgctxt "#30015"
+msgid "Bypassing Anubis protection..."
+msgstr "Bypassing Anubis protection..."
+
+# Settings strings
+msgctxt "#30100"
+msgid "General"
+msgstr "General"
+
+msgctxt "#30101"
+msgid "Mirror / Domain"
+msgstr "Mirror / Domain"
+
+msgctxt "#30102"
+msgid "For example: kinopub.me or rezka.ag"
+msgstr "For example: kinopub.me or rezka.ag"
+
+msgctxt "#30103"
+msgid "Protocol"
+msgstr "Protocol"
+
+msgctxt "#30104"
+msgid "Video Quality"
+msgstr "Video Quality"
+
+msgctxt "#30105"
+msgid "Always ask"
+msgstr "Always ask"
+
+msgctxt "#30106"
+msgid "Voiceover / Translator"
+msgstr "Voiceover / Translator"
+
+msgctxt "#30107"
+msgid "Always ask"
+msgstr "Always ask"
+
+msgctxt "#30108"
+msgid "Default (first available)"
+msgstr "Default (first available)"
+
+msgctxt "#30109"
+msgid "Fetch title description & ratings"
+msgstr "Fetch title description & ratings"
+
+msgctxt "#30120"
+msgid "HDRezka Account"
+msgstr "HDRezka Account"
+
+msgctxt "#30121"
+msgid "Enable authorization"
+msgstr "Enable authorization"
+
+msgctxt "#30122"
+msgid "Username or Email"
+msgstr "Username or Email"
+
+msgctxt "#30123"
+msgid "Password"
+msgstr "Password"
+
+msgctxt "#30124"
+msgid "Test Login / Refresh Session"
+msgstr "Test Login / Refresh Session"
+
+msgctxt "#30140"
+msgid "Proxy"
+msgstr "Proxy"
+
+msgctxt "#30141"
+msgid "Use proxy"
+msgstr "Use proxy"
+
+msgctxt "#30142"
+msgid "Proxy type"
+msgstr "Proxy type"
+
+msgctxt "#30143"
+msgid "Proxy URL"
+msgstr "Proxy URL"
+
+msgctxt "#30144"
+msgid "Format: host:port or user:password@host:port"
+msgstr "Format: host:port or user:password@host:port"
