@@ -34,7 +34,7 @@ def build():
             for file in files:
                 if any(file.endswith(ext) for ext in exclude_exts):
                     continue
-                if file in ("build.py", zip_name):
+                if file in ("build.py", zip_name, ".gitignore"):
                     continue
 
                 abs_path = os.path.join(root, file)
