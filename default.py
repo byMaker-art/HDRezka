@@ -1,810 +1,1290 @@
+#!/usr/bin/python
 # -*- coding: utf-8 -*-
-"""
-HDRezka Add-on for Kodi
-Compatible with Kodi 19, 20, 21 (Omega), and 22 (Piers).
-Includes Anubis Proof-of-Work solver, mirror management, and personal account bookmarks.
-"""
+#
+# Writer (c) 2012-2025, MrStealth, dandy
 
 import os
 import re
 import sys
+import socket
 import urllib.parse
+import json
+import time
+import hashlib
+
+ADDON_PATH = os.path.dirname(__file__)
+LIB_PATH = os.path.join(ADDON_PATH, "resources", "lib")
+
+if LIB_PATH not in sys.path:
+    sys.path.insert(0, LIB_PATH)
+if ADDON_PATH not in sys.path:
+    sys.path.insert(0, ADDON_PATH)
 
 import xbmc
 import xbmcaddon
 import xbmcgui
 import xbmcplugin
+import xbmcvfs
+import XbmcHelpers
+import SearchHistory as history
+from Translit import Translit
+from cache import HDRezkaCache
 
-from lib.client import DEFAULT_USER_AGENT, RezkaClient
-from lib.compat import IS_KODI, get_profile_path, log, set_art, set_video_info
-from lib.history import add_to_history, clear_history, get_history
-from lib.parser import (
-    QUALITY_WEIGHTS,
-    decode_trash_string,
-    parse_catalog_items,
-    parse_dom,
-    parse_episodes_from_page,
-    parse_stream_links,
-    parse_subtitles,
-    parse_translators,
-    strip_tags,
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+import actions
+import helpers
+import router
+from voidboost import parse_streams
+
+
+def anubis_pow(random_data, difficulty):
+
+    nonce = 0
+
+    zero_bytes = difficulty // 2
+    half = difficulty % 2
+
+    while True:
+
+        digest = hashlib.sha256(
+            (random_data + str(nonce)).encode()
+        ).digest()
+
+        ok = True
+
+        for i in range(zero_bytes):
+            if digest[i] != 0:
+                ok = False
+                break
+
+        if ok and half:
+            if digest[zero_bytes] >> 4 != 0:
+                ok = False
+
+        if ok:
+            return digest.hex(), nonce
+
+        nonce += 1
+
+
+retry = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[500,502,503,504]
 )
 
-PLUGIN_ID = "plugin.video.hdrezka.tv"
+
+common = XbmcHelpers
+transliterate = Translit()
+
+socket.setdefaulttimeout(120)
+
+USER_AGENT = "Mozilla/5.0 (Windows NT 6.2; WOW64; rv:40.0) Gecko/20100101 Firefox/40.0"
+
+CDN_SERIES_URL = "/ajax/get_cdn_series/"
+RUN_PLUGIN_FMT = "RunPlugin(%s)"
+CONTAINER_REFRESH = "Container.Refresh()"
+BUBBLE_CACHE_TTL = 3 * 24 * 3600
+
+ANUBIS_CHALLENGE_RE = re.compile(
+    r'<([a-z][a-z0-9]*)[^>]*\bid\s*=\s*["\']anubis_challenge["\'][^>]*>(.{0,10000}?)</\1\s*>',
+    re.S | re.I
+)
 
 
-class HDRezkaAddon:
-    def __init__(self):
-        self.addon = xbmcaddon.Addon(PLUGIN_ID)
-        self.handle = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else -1
-        self.plugin_url = sys.argv[0] if len(sys.argv) > 0 else f"plugin://{PLUGIN_ID}/"
-        
-        self.icon = self.addon.getAddonInfo("icon")
-        self.fanart = self.addon.getAddonInfo("fanart")
-        self.next_icon = os.path.join(self.addon.getAddonInfo("path"), "resources", "icons", "next.png")
+class HdrezkaTV:
 
-        # Load settings
-        self.domain = self.addon.getSetting("domain") or "kinopub.me"
-        self.protocol = self.addon.getSetting("dom_protocol") or "https"
-        self.quality_pref = self.addon.getSetting("quality") or "select"
-        self.translator_pref = self.addon.getSetting("translator") or "select"
-        self.fetch_description = self.addon.getSettingBool("description") if hasattr(self.addon, "getSettingBool") else (self.addon.getSetting("description") != "false")
+    def solve_anubis(self, html, original_url):
+        m = ANUBIS_CHALLENGE_RE.search(html)
+        if not m:
+            helpers.log("No anubis_challenge found in HTML")
+            return False
 
-        # Proxy settings
-        use_proxy = self.addon.getSettingBool("use_proxy") if hasattr(self.addon, "getSettingBool") else (self.addon.getSetting("use_proxy") == "true")
-        proxy_proto = self.addon.getSetting("protocol") or "http"
-        proxy_url = self.addon.getSetting("proxy_url") or ""
-        proxy_config = {
-            "use_proxy": use_proxy,
-            "protocol": proxy_proto,
-            "proxy_url": proxy_url
-        }
-
-        # Initialize smart client
-        self.client = RezkaClient(
-            domain=self.domain,
-            protocol=self.protocol,
-            proxy_config=proxy_config,
-            user_agent=DEFAULT_USER_AGENT
-        )
-
-        # Check account authorization if enabled
-        auth_enabled = self.addon.getSettingBool("auth_enabled") if hasattr(self.addon, "getSettingBool") else (self.addon.getSetting("auth_enabled") == "true")
-        if auth_enabled and not self.client.is_logged_in():
-            username = self.addon.getSetting("username")
-            password = self.addon.getSetting("password")
-            if username and password:
-                log("Auto-authenticating with saved credentials...")
-                self.client.login(username, password)
-
-    def get_string(self, string_id):
-        return self.addon.getLocalizedString(string_id)
-
-    def normalize_url(self, raw_url):
-        """
-        Normalizes any URL (e.g. from an old favorite using a legacy domain)
-        to the currently active mirror domain and protocol.
-        """
-        if not raw_url:
-            return self.client.base_url
-        parsed = urllib.parse.urlparse(raw_url)
-        path = parsed.path
-        if parsed.query:
-            path += f"?{parsed.query}"
-        return f"{self.client.base_url}/{path.lstrip('/')}"
-
-    def build_uri(self, mode, **kwargs):
-        params = {"mode": mode}
-        for k, v in kwargs.items():
-            if v is not None:
-                params[k] = str(v)
-        return f"{self.plugin_url}?{urllib.parse.urlencode(params)}"
-
-    def run(self):
-        query_string = sys.argv[2][1:] if len(sys.argv) > 2 and sys.argv[2].startswith("?") else ""
-        params = dict(urllib.parse.parse_qsl(query_string))
-        mode = params.get("mode")
-
-        log(f"Handling mode='{mode}' with params: {params}")
-
-        if not mode:
-            self.show_main_menu()
-        elif mode == "show":
-            self.show_item(params.get("url"))
-        elif mode == "play":
-            self.play_stream(params.get("url"), params.get("title"))
-        elif mode == "play_episode":
-            self.play_episode(params)
-        elif mode == "index":
-            url = params.get("url", f"{self.client.base_url}/films/")
-            page = int(params.get("page", 1))
-            self.show_catalog(url, page)
-        elif mode == "categories":
-            self.show_categories()
-        elif mode == "sub_categories":
-            self.show_sub_categories(params.get("url"))
-        elif mode == "collections":
-            page = int(params.get("page", 1))
-            self.show_collections(page)
-        elif mode == "search":
-            self.show_search(params.get("keyword"))
-        elif mode == "history":
-            self.show_history()
-        elif mode == "clear_history":
-            clear_history()
-            xbmcgui.Dialog().notification("HDRezka", self.get_string(30009), self.icon, 2000)
-            xbmc.executebuiltin("Container.Refresh")
-        elif mode == "favorites":
-            self.show_favorites(int(params.get("page", 1)))
-        elif mode == "login_action":
-            self.action_login()
-        else:
-            log(f"Unknown mode: {mode}, opening main menu")
-            self.show_main_menu()
-
-    # -------------------------------------------------------------------------
-    # Main Menu & Navigation
-    # -------------------------------------------------------------------------
-    def show_main_menu(self):
-        items = [
-            (30000, "search", self.icon),
-            (30001, "history", self.icon),
-        ]
-
-        # If user has enabled account or is logged in, show Bookmarks
-        auth_enabled = self.addon.getSettingBool("auth_enabled") if hasattr(self.addon, "getSettingBool") else (self.addon.getSetting("auth_enabled") == "true")
-        if auth_enabled or self.client.is_logged_in():
-            items.append((30003, "favorites", self.icon))
-
-        items.extend([
-            (30004, "films", self.icon),
-            (30005, "series", self.icon),
-            (30006, "cartoons", self.icon),
-            (30007, "animation", self.icon),
-            (30002, "categories", self.icon),
-            (30008, "collections", self.icon),
-        ])
-
-        for str_id, section, thumb in items:
-            title = self.get_string(str_id)
-            if section in ("films", "series", "cartoons", "animation"):
-                uri = self.build_uri("index", url=f"{self.client.base_url}/{section}/", page=1)
-            elif section == "categories":
-                uri = self.build_uri("categories")
-            elif section == "collections":
-                uri = self.build_uri("collections", page=1)
-            elif section == "search":
-                uri = self.build_uri("search")
-            elif section == "history":
-                uri = self.build_uri("history")
-            elif section == "favorites":
-                uri = self.build_uri("favorites", page=1)
-            else:
-                uri = self.build_uri(section)
-
-            item = xbmcgui.ListItem(title)
-            set_art(item, {"icon": thumb, "thumb": thumb, "fanart": self.fanart})
-            xbmcplugin.addDirectoryItem(self.handle, uri, item, isFolder=True)
-
-        xbmcplugin.setContent(self.handle, "files")
-        xbmcplugin.endOfDirectory(self.handle, succeeded=True)
-
-    def show_catalog(self, url, page=1):
-        url = self.normalize_url(url)
-        page_url = url.rstrip("/")
-        if page > 1:
-            page_url = f"{page_url}/page/{page}/"
-        else:
-            page_url = f"{page_url}/"
-
-        log(f"Fetching catalog: {page_url}")
         try:
-            html = self.client.request(page_url)
-        except Exception as e:
-            xbmcgui.Dialog().notification("HDRezka", f"Ошибка загрузки: {e}", self.icon, 3000)
-            xbmcplugin.endOfDirectory(self.handle, succeeded=False)
-            return
+            data = json.loads(m.group(2))
+            challenge = data["challenge"]
+            start = time.time()
+            hash_value, nonce = anubis_pow(
+                challenge["randomData"],
+                challenge["difficulty"]
+            )
+            elapsed = max(int((time.time() - start) * 1000), 50)
+            helpers.log(f"Anubis solved nonce={nonce} in {elapsed}ms")
 
-        items = parse_catalog_items(html, self.client.base_url)
-        for entry in items:
-            title = entry["title"]
-            rating_str = f" [COLOR=green][{entry['rating']}][/COLOR]" if entry["rating"] else ""
-            year_str = f" [COLOR=gray]({entry['extra_info']})[/COLOR]" if entry["extra_info"] else ""
-            display_title = f"{title}{rating_str}{year_str}"
-
-            uri = self.build_uri("show", url=entry["url"])
-            item = xbmcgui.ListItem(display_title)
-            
-            info = {
-                "title": title,
-                "year": entry["year"],
-                "country": entry["country"],
-                "genre": entry["genre"],
-                "rating": entry["rating"],
-                "mediatype": "tvshow" if entry["is_serial"] else "movie",
+            pass_url = f"{self.url}/.within.website/x/cmd/anubis/api/pass-challenge"
+            pass_params = {
+                "id": challenge["id"],
+                "response": hash_value,
+                "nonce": nonce,
+                "elapsedTime": elapsed,
+                "redir": "/"
             }
-            set_video_info(item, info)
-            set_art(item, {
-                "icon": entry["image"] or self.icon,
-                "thumb": entry["image"] or self.icon,
-                "poster": entry["image"] or self.icon,
-                "fanart": self.fanart
-            })
 
-            # If movie and quality preference is preset (not 'select'), it can be directly playable
-            if not entry["is_serial"] and self.quality_pref != "select":
-                item.setProperty("IsPlayable", "true")
-                xbmcplugin.addDirectoryItem(self.handle, uri, item, isFolder=False)
-            else:
-                xbmcplugin.addDirectoryItem(self.handle, uri, item, isFolder=True)
-
-        # Pagination: check if there's a next page
-        if len(items) >= 16:
-            next_title = f"[COLOR=orange]{self.get_string(1004)}[/COLOR]"
-            next_uri = self.build_uri("index", url=url, page=page + 1)
-            next_item = xbmcgui.ListItem(next_title)
-            set_art(next_item, {"icon": self.next_icon, "thumb": self.next_icon, "fanart": self.fanart})
-            xbmcplugin.addDirectoryItem(self.handle, next_uri, next_item, isFolder=True)
-
-        xbmcplugin.setContent(self.handle, "movies")
-        xbmcplugin.endOfDirectory(self.handle, succeeded=True)
-
-    def show_categories(self):
-        log("Loading categories")
-        try:
-            html = self.client.request(self.client.base_url)
-        except Exception as e:
-            xbmcgui.Dialog().notification("HDRezka", f"Ошибка: {e}", self.icon, 3000)
-            xbmcplugin.endOfDirectory(self.handle, succeeded=False)
-            return
-
-        genres = parse_dom(html, "ul", attrs={"id": "topnav-menu"})
-        if genres:
-            titles = parse_dom(genres[0], "a", attrs={"class": "b-topnav__item-link"})
-            links = parse_dom(genres[0], "a", attrs={"class": "b-topnav__item-link"}, ret="href")
-            for i, name in enumerate(titles):
-                title = strip_tags(name)
-                link = self.normalize_url(links[i])
-                uri = self.build_uri("sub_categories", url=link)
-                item = xbmcgui.ListItem(title)
-                set_art(item, {"icon": self.icon, "thumb": self.icon, "fanart": self.fanart})
-                xbmcplugin.addDirectoryItem(self.handle, uri, item, isFolder=True)
-
-        xbmcplugin.setContent(self.handle, "files")
-        xbmcplugin.endOfDirectory(self.handle, succeeded=True)
-
-    def show_sub_categories(self, url):
-        url = self.normalize_url(url)
-        try:
-            html = self.client.request(url)
-        except Exception as e:
-            xbmcgui.Dialog().notification("HDRezka", f"Ошибка: {e}", self.icon, 3000)
-            xbmcplugin.endOfDirectory(self.handle, succeeded=False)
-            return
-
-        # Add link to all items in category
-        root_title = f"[COLOR=lightblue][ {self.get_string(1007)} ][/COLOR]"
-        root_uri = self.build_uri("index", url=url, page=1)
-        root_item = xbmcgui.ListItem(root_title)
-        set_art(root_item, {"icon": self.icon, "thumb": self.icon, "fanart": self.fanart})
-        xbmcplugin.addDirectoryItem(self.handle, root_uri, root_item, isFolder=True)
-
-        genres = parse_dom(html, "ul", attrs={"class": "left"})
-        if genres:
-            titles = parse_dom(genres[0], "a")
-            links = parse_dom(genres[0], "a", ret="href")
-            clean_url = url.replace(self.client.base_url, "")
-            for i, title in enumerate(titles):
-                if not links[i].startswith(clean_url):
-                    continue
-                sub_url = self.normalize_url(links[i])
-                uri = self.build_uri("index", url=sub_url, page=1)
-                item = xbmcgui.ListItem(strip_tags(title))
-                set_art(item, {"icon": self.icon, "thumb": self.icon, "fanart": self.fanart})
-                xbmcplugin.addDirectoryItem(self.handle, uri, item, isFolder=True)
-
-        xbmcplugin.setContent(self.handle, "files")
-        xbmcplugin.endOfDirectory(self.handle, succeeded=True)
-
-    def show_collections(self, page=1):
-        col_url = f"{self.client.base_url}/collections/"
-        if page > 1:
-            col_url = f"{col_url}page/{page}/"
-
-        try:
-            html = self.client.request(col_url)
-        except Exception as e:
-            xbmcgui.Dialog().notification("HDRezka", f"Ошибка: {e}", self.icon, 3000)
-            xbmcplugin.endOfDirectory(self.handle, succeeded=False)
-            return
-
-        content = parse_dom(html, "div", attrs={"class": "b-content__collections_list"})
-        if content:
-            titles = parse_dom(content[0], "a", attrs={"class": "title"})
-            counts = parse_dom(content[0], "div", attrs={"class": "num"})
-            links = parse_dom(content[0], "div", attrs={"class": "b-content__collections_item"}, ret="data-url")
-            covers = parse_dom(content[0], "img", attrs={"class": "cover"}, ret="src")
-
-            for i, name in enumerate(titles):
-                link = self.normalize_url(links[i]) if i < len(links) else ""
-                cnt = counts[i] if i < len(counts) else ""
-                cover = covers[i] if i < len(covers) else self.icon
-                title = f"{name} [COLOR=gray]({cnt})[/COLOR]"
-
-                uri = self.build_uri("index", url=link, page=1)
-                item = xbmcgui.ListItem(title)
-                set_art(item, {"icon": cover, "thumb": cover, "fanart": self.fanart})
-                xbmcplugin.addDirectoryItem(self.handle, uri, item, isFolder=True)
-
-            if len(titles) >= 32:
-                next_uri = self.build_uri("collections", page=page + 1)
-                next_item = xbmcgui.ListItem(self.get_string(1004))
-                set_art(next_item, {"icon": self.next_icon, "thumb": self.next_icon, "fanart": self.fanart})
-                xbmcplugin.addDirectoryItem(self.handle, next_uri, next_item, isFolder=True)
-
-        xbmcplugin.setContent(self.handle, "files")
-        xbmcplugin.endOfDirectory(self.handle, succeeded=True)
-
-    # -------------------------------------------------------------------------
-    # Search & History
-    # -------------------------------------------------------------------------
-    def show_search(self, keyword=None):
-        if not keyword:
-            kbd = xbmc.Keyboard("", self.get_string(30000))
-            kbd.doModal()
-            if not kbd.isConfirmed():
-                return
-            keyword = kbd.getText().strip()
-            if not keyword:
-                return
-
-        add_to_history(keyword)
-        search_url = f"{self.client.base_url}/search/?do=search&subaction=search&q={urllib.parse.quote(keyword)}"
-        self.show_catalog(search_url, page=1)
-
-    def show_history(self):
-        history_items = get_history()
-        
-        # Option to clear history
-        if history_items:
-            clear_uri = self.build_uri("clear_history")
-            clear_item = xbmcgui.ListItem(f"[COLOR=red]{self.get_string(30009)}[/COLOR]")
-            set_art(clear_item, {"icon": self.icon, "thumb": self.icon, "fanart": self.fanart})
-            xbmcplugin.addDirectoryItem(self.handle, clear_uri, clear_item, isFolder=False)
-
-        for word in history_items:
-            uri = self.build_uri("search", keyword=word)
-            item = xbmcgui.ListItem(word)
-            set_art(item, {"icon": self.icon, "thumb": self.icon, "fanart": self.fanart})
-            xbmcplugin.addDirectoryItem(self.handle, uri, item, isFolder=True)
-
-        xbmcplugin.setContent(self.handle, "files")
-        xbmcplugin.endOfDirectory(self.handle, succeeded=True)
-
-    # -------------------------------------------------------------------------
-    # Account Bookmarks (Favorites on site)
-    # -------------------------------------------------------------------------
-    def show_favorites(self, page=1):
-        if not self.client.is_logged_in():
-            # Prompt login
-            dialog = xbmcgui.Dialog()
-            if dialog.yesno("HDRezka", "Для доступа к закладкам необходима авторизация. Выполнить вход сейчас?"):
-                self.action_login()
-            else:
-                xbmcplugin.endOfDirectory(self.handle, succeeded=False)
-                return
-
-        fav_url = f"{self.client.base_url}/favorites/"
-        if page > 1:
-            fav_url = f"{fav_url}page/{page}/"
-
-        self.show_catalog(fav_url, page=page)
-
-    def action_login(self):
-        username = self.addon.getSetting("username")
-        password = self.addon.getSetting("password")
-        if not username or not password:
-            d = xbmcgui.Dialog()
-            username = d.input("Введите логин или email", defaultt=username)
-            if not username:
-                return
-            password = d.input("Введите пароль", defaultt=password, type=xbmcgui.INPUT_ALPHANUM, option=xbmcgui.ALPHANUM_HIDE_INPUT)
-            if not password:
-                return
-            self.addon.setSetting("username", username)
-            self.addon.setSetting("password", password)
-            self.addon.setSetting("auth_enabled", "true")
-
-        success, msg = self.client.login(username, password)
-        dialog = xbmcgui.Dialog()
-        if success:
-            dialog.notification("HDRezka", self.get_string(30012), self.icon, 3000)
-        else:
-            dialog.ok("HDRezka", f"{self.get_string(30013)}:\n{msg}")
-
-    # -------------------------------------------------------------------------
-    # Show Page (Movie details or Episodes list)
-    # -------------------------------------------------------------------------
-    def show_item(self, url):
-        url = self.normalize_url(url)
-        log(f"Showing item: {url}")
-        try:
-            html = self.client.request(url)
-        except Exception as e:
-            xbmcgui.Dialog().notification("HDRezka", f"Ошибка: {e}", self.icon, 3000)
-            xbmcplugin.endOfDirectory(self.handle, succeeded=False)
-            return
-
-        post_id_match = re.findall(r'id=[\'"]post_id[\'"]\s+value=[\'"](\d+)[\'"]', html)
-        if not post_id_match:
-            post_id_match = re.findall(r'value=[\'"](\d+)[\'"]\s+id=[\'"]post_id[\'"]', html)
-        if not post_id_match:
-            post_id_match = re.findall(r'/(\d+)-[^\/]+\.html', url)
-        post_id = post_id_match[0] if post_id_match else None
-        
-        main_titles = parse_dom(html, "h1")
-        main_title = strip_tags(main_titles[0]) if main_titles else "Video"
-
-        covers = parse_dom(html, "img", attrs={"itemprop": "image"}, ret="src")
-        poster = covers[0] if covers else self.icon
-        if not poster.startswith("http"):
-            poster = f"{self.client.base_url}/{poster.lstrip('/')}"
-
-        translators = parse_translators(html)
-        active_translator_id = "0"
-        for t in translators:
-            if t["active"]:
-                active_translator_id = t["id"]
-                break
-        if active_translator_id == "0" and translators:
-            active_translator_id = translators[0]["id"]
-        
-        # If still "0", try to get default translator from initCDNSeriesEvents or initCDNMoviesEvents
-        if active_translator_id == "0":
-            init_s = re.search(r'initCDNSeriesEvents\s*\(\s*\d+\s*,\s*(\d+)', html)
-            init_m = re.search(r'initCDNMoviesEvents\s*\(\s*\d+\s*,\s*(\d+)', html)
-            if init_s:
-                active_translator_id = init_s.group(1)
-            elif init_m:
-                active_translator_id = init_m.group(1)
-
-        # Check if TV Series (has seasons / episodes)
-        is_series = (
-            "/series/" in url
-            or "simple-episodes-tabs" in html
-            or "simple-episodes-list" in html
-            or "initCDNSeriesEvents" in html
-        )
-
-        if is_series:
-            self._handle_series(html, url, post_id, main_title, poster, translators, active_translator_id)
-        else:
-            self._handle_movie(html, url, post_id, main_title, poster, translators, active_translator_id)
-
-    def _handle_movie(self, html, url, post_id, title, poster, translators, active_translator_id):
-        log(f"Handling movie: {title} (ID: {post_id})")
-
-        # Select translator if multiple and requested
-        chosen_tid = active_translator_id
-        if len(translators) > 1 and self.translator_pref == "select":
-            t_names = [t["name"] for t in translators]
-            idx = xbmcgui.Dialog().select(self.get_string(30010), t_names)
-            if idx >= 0:
-                chosen_tid = translators[idx]["id"]
-
-        raw_url = ""
-        subtitles = []
-
-        # If translator is unchanged and page already has embedded streams in HTML, extract directly
-        if chosen_tid == active_translator_id:
-            m_streams = re.search(r'\"streams\":\s*\"([^\"]+)\"', html)
-            if m_streams:
-                raw_url = m_streams.group(1).replace(r"\/", "/")
-                log("Extracted movie streams directly from page HTML")
-
-        # If not embedded or a different translator was selected, request via AJAX
-        if not raw_url:
-            headers = {
-                "X-Requested-With": "XMLHttpRequest",
-                "Referer": url,
-                "Origin": self.client.base_url
-            }
-            data = {
-                "id": post_id,
-                "translator_id": chosen_tid,
-                "action": "get_movie"
-            }
-            ajax_url = f"{self.client.base_url}/ajax/get_cdn_series/"
-
-            try:
-                resp_str = self.client.request(ajax_url, data=data, headers=headers)
-                res = json.loads(resp_str)
-                if not res.get("success"):
-                    msg = res.get("message", "Ошибка получения видео")
-                    log(f"get_movie returned success=False: {msg}")
-                    xbmcgui.Dialog().notification("HDRezka", msg, self.icon, 3000)
-                    xbmcplugin.endOfDirectory(self.handle, succeeded=False)
-                    return
-                raw_url = res.get("url", "")
-                subtitles = parse_subtitles(res)
-            except Exception as e:
-                log(f"Failed to fetch movie stream AJAX: {e}")
-                xbmcgui.Dialog().notification("HDRezka", f"Ошибка получения видео: {e}", self.icon, 3000)
-                xbmcplugin.endOfDirectory(self.handle, succeeded=False)
-                return
-
-        links = parse_stream_links(raw_url)
-        if not links:
-            xbmcgui.Dialog().ok("HDRezka", "Не удалось найти ссылки на видео.")
-            xbmcplugin.endOfDirectory(self.handle, succeeded=False)
-            return
-
-        # If quality preference is "select" and multiple streams available, list them in the directory
-        if self.quality_pref == "select" and len(links) > 1:
-            for q in sorted(links.keys(), key=lambda k: QUALITY_WEIGHTS.get(k, 0), reverse=True):
-                q_link = links[q]
-                q_title = f"{title} ({q})"
-                q_uri = self.build_uri("play", url=q_link, title=q_title)
-                q_item = xbmcgui.ListItem(q_title)
-                set_video_info(q_item, {"title": q_title, "mediatype": "movie"})
-                set_art(q_item, {"icon": poster, "thumb": poster, "poster": poster, "fanart": self.fanart})
-                q_item.setProperty("IsPlayable", "true")
-                if subtitles:
-                    sub_urls = [s["url"] for s in subtitles if s.get("url")]
-                    if sub_urls:
-                        q_item.setSubtitles(sub_urls)
-                xbmcplugin.addDirectoryItem(self.handle, q_uri, q_item, isFolder=False)
-
-            xbmcplugin.setContent(self.handle, "movies")
-            xbmcplugin.endOfDirectory(self.handle, succeeded=True)
-            return
-
-        self._choose_quality_and_play(links, title, poster, subtitles)
-
-    def _handle_series(self, html, url, post_id, main_title, poster, translators, active_translator_id):
-        log(f"Handling series: {main_title} (ID: {post_id})")
-
-        chosen_tid = active_translator_id
-        if len(translators) > 1 and self.translator_pref == "select":
-            t_names = [t["name"] for t in translators]
-            idx = xbmcgui.Dialog().select(self.get_string(30010), t_names)
-            if idx >= 0:
-                chosen_tid = translators[idx]["id"]
-
-        headers = {
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": url,
-            "Origin": self.client.base_url
-        }
-        data = {
-            "id": post_id,
-            "translator_id": chosen_tid,
-            "action": "get_episodes"
-        }
-        ajax_url = f"{self.client.base_url}/ajax/get_cdn_series/"
-
-        try:
-            resp_str = self.client.request(ajax_url, data=data, headers=headers)
-            res = json.loads(resp_str)
-            episodes_html = res.get("episodes", "")
-        except Exception as e:
-            log(f"Failed to fetch episodes AJAX, falling back to page DOM: {e}")
-            episodes_html = html
-
-        # Parse all episodes across all seasons
-        episodes = []
-        for m in re.finditer(r'<li\b([^>]*)>(.*?)</li>', episodes_html, re.DOTALL | re.IGNORECASE):
-            attrs_str, content = m.group(1), m.group(2)
-            ep_m = re.search(r'data-episode_id=[\'"](\d+)[\'"]', attrs_str)
-            if not ep_m:
-                continue
-            e_num = ep_m.group(1)
-            s_m = re.search(r'data-season_id=[\'"](\d+)[\'"]', attrs_str)
-            s_num = s_m.group(1) if s_m else "1"
-            id_m = re.search(r'data-id=[\'"](\d+)[\'"]', attrs_str)
-            p_id = id_m.group(1) if id_m else post_id
-            cdn_m = re.search(r'data-cdn_url=[\'"]([^\'"]*)[\'"]', attrs_str)
-            cdn_url = cdn_m.group(1) if cdn_m else ""
-            ep_title = strip_tags(content)
-            episodes.append((s_num, e_num, p_id, ep_title, cdn_url))
-
-        # Fallback if regex didn't find items
-        if not episodes:
-            li_items = parse_dom(episodes_html, "li")
-            ids = parse_dom(episodes_html, "li", ret="data-id")
-            seasons = parse_dom(episodes_html, "li", ret="data-season_id")
-            episodes_nums = parse_dom(episodes_html, "li", ret="data-episode_id")
-            cdn_urls = parse_dom(episodes_html, "li", ret="data-cdn_url")
-            for i in range(len(li_items)):
-                s_num = seasons[i] if i < len(seasons) else "1"
-                e_num = episodes_nums[i] if i < len(episodes_nums) else str(i + 1)
-                p_id = ids[i] if i < len(ids) else post_id
-                cdn_url = cdn_urls[i] if i < len(cdn_urls) else ""
-                episodes.append((s_num, e_num, p_id, strip_tags(li_items[i]), cdn_url))
-
-        for s_num, e_num, item_post_id, ep_title, cdn_url in episodes:
-            full_title = f"{main_title} - S{s_num.zfill(2)}E{e_num.zfill(2)} ({ep_title})"
-            
-            uri = self.build_uri(
-                "play_episode",
-                url=url,
-                post_id=item_post_id,
-                season_id=s_num,
-                episode_id=e_num,
-                title=full_title,
-                image=poster,
-                idt=chosen_tid,
-                data=cdn_url
+            r = self.session.get(
+                pass_url,
+                params=pass_params,
+                headers={"Referer": original_url, "User-Agent": USER_AGENT},
+                proxies=self.proxies,
+                allow_redirects=False,
+                timeout=30
             )
 
-            item = xbmcgui.ListItem(full_title)
-            info = {
-                "title": full_title,
-                "season": s_num,
-                "episode": e_num,
-                "mediatype": "episode",
+            helpers.log(f"Anubis pass-challenge response: {r.status_code}")
+            helpers.log(f"Session cookies: {dict(self.session.cookies)}")
+            self._save_session()
+            return True
+        except Exception as e:
+            helpers.log(f"Anubis solve fault: {e}")
+            return False
+
+    def __init__(self):
+        self.id = 'plugin.video.hdrezka.tv'
+        self.addon = xbmcaddon.Addon(self.id)
+        self.icon = self.addon.getAddonInfo('icon')
+        self.icon_next = os.path.join(self.addon.getAddonInfo('path'), 'resources/icons/next.png')
+        self.language = self.addon.getLocalizedString
+        # service and RunScript invocations may come without a handle argument
+        self.handle = int(sys.argv[1]) if len(sys.argv) > 1 else None
+        self.profile = xbmcvfs.translatePath(self.addon.getAddonInfo('profile'))
+        self.use_transliteration = self.addon.getSettingBool('use_transliteration')
+        self.quality = self.addon.getSetting('quality')
+        self.translator = self.addon.getSetting('translator')
+        domain = self.addon.getSetting('domain') or 'kinopub.me'
+        domain = re.sub(r'^https?://', '', domain.strip()).rstrip('/')
+        self.domain = domain if domain else 'kinopub.me'
+        self.show_description = self.addon.getSettingBool('show_description')
+        self.use_atl_names = self.addon.getSettingBool('use_atl_names')
+
+        proto = self.addon.getSetting('dom_protocol') or 'https'
+        self.url = proto + '://' + self.domain
+        self.proxies = self._load_proxy_settings()
+        self.session = self._load_session()
+
+    def _save_session(self):
+        try:
+            self.addon.setSetting("cookies",helpers.dump_cookies(self.session.cookies))
+        except Exception as e:
+            helpers.log("save cookies failed: %s" % e)
+
+    def _load_session(self):
+        session = requests.Session()
+
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[500, 502, 503, 504]
+        )
+
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        session.headers.update({
+            "User-Agent": USER_AGENT,
+            "Referer": self.url + "/",
+        })
+
+        saved_cookies = self.addon.getSetting('cookies')
+        if saved_cookies:
+            session.cookies = helpers.load_cookies(
+                self.addon.getSetting('cookies')
+            )
+
+        return session
+
+    def _load_proxy_settings(self):
+        use_proxy = self.addon.getSetting('use_proxy')
+        if not use_proxy or str(use_proxy).lower() in ('false', '0'):
+            return None
+        proxy_protocol = self.addon.getSetting('protocol') or 'http'
+        proxy_url = self.addon.getSetting('proxy_url')
+        if not proxy_url or proxy_url == 'USERNAME:PASSWORD@IPADDRESS:PORT':
+            return None
+        return {
+            'http': proxy_protocol + '://' + proxy_url,
+            'https': proxy_protocol + '://' + proxy_url
+        }
+
+    def is_atl_mode(self, params=None):
+        if params and params.get('atl', '').lower() == 'true':
+            return True
+        return self.use_atl_names
+
+    def make_response(self, method, uri, params=None, data=None, cookies=None, headers=None, **kwargs):
+        if cookies:
+            self.session.cookies.update(cookies)
+
+        if uri.startswith('http'):
+            # Transparently normalize legacy or alternate mirror domains to current active mirror
+            parsed = urllib.parse.urlsplit(uri)
+            url = urllib.parse.urlunsplit((
+                self.addon.getSetting('dom_protocol') or 'https',
+                self.domain,
+                parsed.path,
+                parsed.query,
+                parsed.fragment
+            ))
+        else:
+            url = self.url + uri
+
+        req_headers = {
+            "User-Agent": USER_AGENT,
+            "Referer": f"{self.url}/"
+        }
+        if headers:
+            req_headers.update(headers)
+
+        try:
+            response = self.session.request(
+                method,
+                url,
+                params=params,
+                data=data,
+                headers=req_headers,
+                proxies=self.proxies,
+                timeout=30,
+                **kwargs
+            )
+        except requests.exceptions.RequestException as ex:
+            helpers.log('make_response retry after ex: %s' % ex)
+            time.sleep(1)
+            response = self.session.request(
+                method,
+                url,
+                params=params,
+                data=data,
+                headers=req_headers,
+                proxies=self.proxies,
+                timeout=30,
+                **kwargs
+            )
+
+        if "anubis_challenge" in response.text:
+            helpers.log("Anubis challenge detected in make_response, solving...")
+            if self.solve_anubis(response.text, url):
+                helpers.log("Retrying request after Anubis bypass...")
+                response = self.session.request(
+                    method,
+                    url,
+                    params=params,
+                    data=data,
+                    headers=req_headers,
+                    proxies=self.proxies,
+                    timeout=30,
+                    **kwargs
+                )
+
+        if cookies or response.cookies:
+            self._save_session()
+
+        return response
+
+    def main(self, action):
+        params = router.parse_uri(action)
+        helpers.log(f'*** main params: {params}')
+
+        mode = params.get('mode')
+        if mode == 'play':
+            self.play(params.get('url'))
+        elif mode == 'play_episode':
+            self.play_episode(
+                params.get('url'),
+                params.get('post_id'),
+                params.get('season_id'),
+                params.get('episode_id'),
+                urllib.parse.unquote_plus(params.get('title') or ''),
+                params.get('image'),
+                params.get('idt'),
+                params.get('strm'),
+                params.get('show_id')
+            )
+        elif mode == 'select_translator':
+            self.select_translator_item(
+                params.get('uri') or params.get('url'), params.get('via'), params.get('atl'), params.get('strm'))
+        elif mode == 'show':
+            self.show(params.get('uri') or params.get('url'), self.is_atl_mode(params), params.get('strm'))
+        elif mode == 'index':
+            self.index(params.get('uri') or params.get('url'), params.get('page'), params.get('query_filter'))
+        elif mode == 'categories':
+            self.categories()
+        elif mode == 'sub_categories':
+            self.sub_categories(params.get('uri') or params.get('url'))
+        elif mode == 'search':
+            external = 'main' if 'main' in params else None
+            if not external:
+                external = 'usearch' if 'usearch' in params else None
+            self.search(params.get('keyword'), external)
+        elif mode == 'history':
+            self.history()
+        elif mode == 'history_delete':
+            self.delete_history(params.get('keyword'))
+        elif mode == 'continue':
+            self.continues()
+        elif mode == 'continue_delete':
+            self.delete_continue(params.get('id'))
+        elif mode == 'collections':
+            self.collections(int(params.get('page', 1)))
+        else:
+            self.menu()
+
+    def menu(self):
+        menu_items = (
+            ('search', 'FF00FF00', 30000),
+            ('history', 'FF00FF00', 30008),
+            ('categories', 'FF00FF00', 30003),
+            ('index', 'FFDDD2CC', 30009),
+            ('index_popular', 'FFDDD2CC', 30010),
+            ('index_soon', 'FFDDD2CC', 30011),
+            ('index_watching', 'FFDDD2CC', 30012),
+            ('continue', 'FFDDD2CC', 30013),
+        )
+        for mode, color, translation_id in menu_items:
+            uri = router.build_uri(mode)
+            if '_' in mode:
+                mode, query_filter = mode.split('_')
+                uri = router.build_uri(mode, query_filter=query_filter)
+            item = xbmcgui.ListItem(f'[COLOR={color}]{self.language(translation_id)}[/COLOR]')
+            item.setArt({'thumb': self.icon})
+            xbmcplugin.addDirectoryItem(self.handle, uri, item, True)
+
+        xbmcplugin.setContent(self.handle, 'movies')
+        xbmcplugin.endOfDirectory(self.handle, True)
+
+    def categories(self):
+        response = self.make_response('GET', '/')
+        genres = common.parseDOM(response.text, "ul", attrs={"id": "topnav-menu"})
+
+        titles = common.parseDOM(genres, "a", attrs={"class": "b-topnav__item-link"})
+        links = common.parseDOM(genres, "a", attrs={"class": "b-topnav__item-link"}, ret='href')
+        for i, title in enumerate(titles):
+            title = common.stripTags(title)
+            item_uri = router.build_uri('sub_categories', uri=links[i])
+            item = xbmcgui.ListItem(title)
+            item.setArt({'thumb': self.icon})
+            xbmcplugin.addDirectoryItem(self.handle, item_uri, item, True)
+
+        item_uri = router.build_uri('collections')
+        item = xbmcgui.ListItem('Подборки')
+        item.setArt({'thumb': self.icon})
+        xbmcplugin.addDirectoryItem(self.handle, item_uri, item, True)
+
+        xbmcplugin.setContent(self.handle, 'files')
+        xbmcplugin.endOfDirectory(self.handle, True)
+
+    def sub_categories(self, uri):
+        response = self.make_response('GET', '/')
+        genres = common.parseDOM(response.text, "ul", attrs={"class": "left"})
+
+        titles = common.parseDOM(genres, "a")
+        links = common.parseDOM(genres, "a", ret='href')
+
+        item_uri = router.build_uri('index', uri=uri)
+        item = xbmcgui.ListItem(f'[COLOR=FF00FFF0]{self.language(30007)}[/COLOR]')
+        item.setArt({'thumb': self.icon})
+        xbmcplugin.addDirectoryItem(self.handle, item_uri, item, True)
+
+        for i, title in enumerate(titles):
+            if not links[i].startswith(uri):
+                continue
+            item_uri = router.build_uri('index', uri=links[i])
+            item = xbmcgui.ListItem(title)
+            item.setArt({'thumb': self.icon})
+            xbmcplugin.addDirectoryItem(self.handle, item_uri, item, True)
+
+        xbmcplugin.setContent(self.handle, 'files')
+        xbmcplugin.endOfDirectory(self.handle, True)
+
+    def collections(self, page):
+        uri = '/collections/'
+        if page != 1:
+            uri = f'/collections/page/{page}/'
+
+        response = self.make_response('GET', uri)
+        content = common.parseDOM(response.text, 'div', attrs={'class': 'b-content__collections_list clearfix'})
+        titles = common.parseDOM(content, "a", attrs={"class": "title"})
+        counts = common.parseDOM(content, 'div', attrs={"class": ".num"})
+        links = common.parseDOM(content, "div", attrs={"class": "b-content__collections_item"}, ret="data-url")
+        icons = common.parseDOM(content, "img", attrs={"class": "cover"}, ret="src")
+
+        for i, name in enumerate(titles):
+            item_uri = router.build_uri('index', uri=router.normalize_uri(links[i]))
+            item = xbmcgui.ListItem(f'{name} [COLOR=55FFFFFF]({counts[i]})[/COLOR]')
+            item.setArt({'thumb': icons[i]})
+            xbmcplugin.addDirectoryItem(self.handle, item_uri, item, True)
+
+        if not len(titles) < 32:
+            item_uri = router.build_uri('collections', page=page + 1)
+            item = xbmcgui.ListItem("[COLOR=orange]" + self.language(30004) + "[/COLOR]")
+            item.setArt({'icon': self.icon_next})
+            xbmcplugin.addDirectoryItem(self.handle, item_uri, item, True)
+
+        xbmcplugin.setContent(self.handle, 'files')
+        xbmcplugin.endOfDirectory(self.handle, True)
+
+    def index(self, uri=None, page=None, query_filter=None):
+        url = uri
+        if not url:
+            url = '/'
+        if page:
+            url += f'page/{page}/'
+        if query_filter:
+            url += f'?filter={query_filter}'
+
+        response = self.make_response('GET', url)
+        content = common.parseDOM(response.text, "div", attrs={"class": "b-content__inline_items"})
+
+        items = common.parseDOM(content, "div", attrs={"class": "b-content__inline_item"})
+        post_ids = common.parseDOM(content, "div", attrs={"class": "b-content__inline_item"}, ret="data-id")
+
+        link_containers = common.parseDOM(items, "div", attrs={"class": "b-content__inline_item-link"})
+
+        links = common.parseDOM(link_containers, "a", ret='href')
+        titles = common.parseDOM(link_containers, "a")
+        div_covers = common.parseDOM(items, "div", attrs={"class": "b-content__inline_item-cover"})
+
+        for i, name in enumerate(titles):
+            info = self.get_item_additional_info(post_ids[i])
+            country_divs = common.parseDOM(link_containers[i], "div")
+            country_text = country_divs[0] if country_divs else ''
+            title = helpers.built_title(name, country_text, **info)
+            image = self._normalize_url(common.parseDOM(div_covers[i], "img", ret='src')[0])
+            item_uri = router.build_uri('show', uri=router.normalize_uri(links[i]))
+            year, country, genre = helpers.get_media_attributes(country_text)
+            is_serial = common.parseDOM(div_covers[i], 'span', attrs={"class": "info"})
+            item = xbmcgui.ListItem(title)
+            item.setArt({'thumb': image, 'icon': image})
+            item.addContextMenuItems(self._translator_menu(router.normalize_uri(links[i])))
+            info_labels = {
+                'title': title,
+                'genre': genre,
+                'country': country,
+                'plot': info['description'],
+                'rating': info['rating']['site']
             }
-            set_video_info(item, info)
-            set_art(item, {"icon": poster, "thumb": poster, "poster": poster, "fanart": self.fanart})
-            item.setProperty("IsPlayable", "true")
-            xbmcplugin.addDirectoryItem(self.handle, uri, item, isFolder=False)
+            if year:
+                info_labels['year'] = year
+            if info['age_limit']:
+                info_labels['mpaa'] = info['age_limit']
+            item.setInfo(type='video', infoLabels=info_labels)
+            is_folder = True
+            if (self.quality != 'select') and not is_serial:
+                item.setProperty('IsPlayable', 'true')
+                is_folder = False
+            xbmcplugin.addDirectoryItem(self.handle, item_uri, item, is_folder)
 
-        xbmcplugin.setContent(self.handle, "episodes")
-        xbmcplugin.endOfDirectory(self.handle, succeeded=True)
+        if not len(titles) < 16:
+            params = {'page': 2, 'uri': uri}
+            if page:
+                params['page'] = int(page) + 1
+            if query_filter:
+                params['query_filter'] = query_filter
+            item_uri = router.build_uri('index', **params)
+            item = xbmcgui.ListItem("[COLOR=orange]" + self.language(30004) + "[/COLOR]")
+            item.setArt({'icon': self.icon_next})
+            xbmcplugin.addDirectoryItem(self.handle, item_uri, item, True)
 
-    # -------------------------------------------------------------------------
-    # Stream Resolving & Playback
-    # -------------------------------------------------------------------------
-    def play_episode(self, params):
-        url = self.normalize_url(params.get("url"))
-        post_id = params.get("post_id")
-        season_id = params.get("season_id")
-        episode_id = params.get("episode_id")
-        idt = params.get("idt", "0")
-        title = params.get("title", "Episode")
-        poster = params.get("image", self.icon)
-        data = params.get("data", "")
+        xbmcplugin.setContent(self.handle, 'movies')
+        xbmcplugin.endOfDirectory(self.handle, True)
 
-        # Fallback post_id from url
-        if (not post_id or post_id == "None") and url:
-            id_m = re.search(r'/(\d+)-[^\/]+\.html', url)
-            if id_m:
-                post_id = id_m.group(1)
+    def select_quality(self, streams, title, image, subtitles=None, strm=None, play_info=None):
+        if strm == '1' and self.quality == 'select' and streams:
+            name, quality, url = max(streams, key=lambda s: s[1])
+            helpers.log(f'strm selected best quality name: {name}')
+            self.play(url, subtitles, play_info, title)
+            return
+        for name, quality, url in streams:
+            if self.quality != 'select' or strm == '1':
+                if (name == self.quality) or (int(self.quality.split('p')[0]) >= quality):
+                    helpers.log(f'selected quality name: {name}')
+                    self.play(url, subtitles, play_info, title)
+                    break
+            else:
+                film_title = f"{title} - [COLOR=orange]{name}[/COLOR]"
+                item_uri = router.build_uri('play', url=url)
+                item = xbmcgui.ListItem(film_title)
+                item.setArt({'icon': image})
+                item.setInfo(
+                    type='Video',
+                    infoLabels={'title': film_title, 'overlay': xbmcgui.ICON_OVERLAY_WATCHED, 'playCount': 0}
+                )
+                item.setProperty('IsPlayable', 'true')
+                helpers.set_item_subtitles(item, subtitles)
+                xbmcplugin.addDirectoryItem(self.handle, item_uri, item, False)
 
-        # Fallback default translator ID
-        if not idt or idt in ("0", "None"):
+    def _parse_translators(self, content):
+        try:
+            div = common.parseDOM(content, 'ul', attrs={'id': 'translators-list'})[0]
+        except Exception as ex:
+            helpers.log(
+                'parse translators fault ex: %s has_list=%s translator_id_count=%d'
+                % (ex, 'translators-list' in content, content.count('data-translator_id'))
+            )
+            init_m = re.search(r'initCDN(?:Movies|Series)Events\s*\(\s*\d+\s*,\s*(\d+)', content)
+            if init_m:
+                t_id = init_m.group(1)
+                return ["По умолчанию"], [t_id], [False], [False], t_id
+            return None, None, None, None, None
+
+        titles = common.parseDOM(div, 'li', ret='title')
+        if not titles:
+            titles = common.parseDOM(div, 'a', ret='title')
+        ids = common.parseDOM(div, 'li', ret="data-translator_id")
+        if not ids:
+            ids = common.parseDOM(div, 'a', ret="data-translator_id")
+
+        if not ids:
+            ids = re.findall(r'data-translator_id=[\'"](\d+)[\'"]', div)
+            titles = re.findall(r'title=[\'"]([^\'"]+)[\'"]', div)
+
+        # transform flag image into title suffix
+        title_items = common.parseDOM(div, 'li')
+        for index, title in enumerate(title_items):
+            if index >= len(titles):
+                break
+            images = common.parseDOM(title, 'img', ret='title')
+            for img in images:
+                titles[index] += f' ({img})'
+
+        directors = common.parseDOM(div, 'li', ret='data-director') or common.parseDOM(div, 'a', ret='data-director')
+        if not directors:
+            directors = [False] * len(ids)
+
+        premium = ['b-prem_translator' in tag for tag in re.findall(r'<li\b[^>]*>', div)]
+        if not premium or len(premium) != len(ids):
+            premium = ['b-prem_translator' in tag for tag in re.findall(r'<a\b[^>]*>', div)]
+        if not premium or len(premium) != len(ids):
+            premium = [False] * len(ids)
+
+        active_id = None
+        for m in re.finditer(r'<li\b([^>]*)>(.*?)</li>', div, re.DOTALL | re.IGNORECASE):
+            attrs, inner = m.group(1), m.group(2)
+            combined = attrs + " " + inner
+            if "active" in combined:
+                id_m = re.search(r'data-translator_id=[\'"](\d+)[\'"]', combined)
+                if id_m:
+                    active_id = id_m.group(1)
+                    break
+
+        if not active_id:
+            init_m = re.search(r'initCDN(?:Movies|Series)Events\s*\(\s*\d+\s*,\s*(\d+)', content)
+            if init_m:
+                active_id = init_m.group(1)
+
+        return titles, ids, directors, premium, active_id
+
+    def _get_cached_translator(self, post_id, ids):
+        try:
+            cached = HDRezkaCache(self.profile).get_post_translation(post_id)
+        except Exception as ex:
+            helpers.log(f'get cached translator fault ex: {ex}')
+            return None
+        if cached is not None and cached in (ids or []):
+            return cached
+        return None
+
+    def _translator_menu(self, uri):
+        item_uri = router.build_uri('select_translator', uri=uri, via='menu')
+        return [(self.language(30006), RUN_PLUGIN_FMT % item_uri)]
+
+    def _add_translator_item(self, titles, ids, premium, post_id, idt, uri):
+        if not titles or not ids:
+            return
+        cached = self._get_cached_translator(post_id, ids)
+        current = cached if cached is not None else idt
+        try:
+            current_index = ids.index(current)
+            translator_name = titles[current_index]
+        except Exception:
+            current_index = 0
+            translator_name = titles[0]
+        try:
+            stored_name = HDRezkaCache(self.profile).get_post_translation_name(post_id)
+        except Exception:
+            stored_name = None
+        if stored_name:
+            translator_name = stored_name
+        if premium and current_index < len(premium) and premium[current_index]:
+            translator_name = '%s [%s]' % (translator_name, self.language(30019))
+        try:
+            label = self.language(30014) % translator_name
+        except Exception:
+            label = translator_name
+        item_uri = router.build_uri('select_translator', uri=uri, via='line')
+        item = xbmcgui.ListItem(f'[COLOR=yellowgreen]{label}[/COLOR]')
+        item.setArt({'thumb': self.icon, 'icon': self.icon})
+        # explicit false: JSONRPC exposes requested ListItem properties to scans
+        item.setProperty('IsPlayable', 'false')
+        # Folder row served inline: scans skip folders, clicks never go empty.
+        xbmcplugin.addDirectoryItem(self.handle, item_uri, item, True)
+
+    def _cdn_headers(self, url):
+        return {
+            "Host": self.domain,
+            "Origin": self.url,
+            "Referer": url,
+            "User-Agent": USER_AGENT,
+            "X-Requested-With": "XMLHttpRequest"
+        }
+
+    def _count_translator_episodes(self, post_id, translator_id, url, director=None):
+        data = {
+            "id": post_id,
+            "translator_id": translator_id,
+            "action": "get_episodes"
+        }
+        if director:
+            data['is_director'] = director
+        try:
+            response = self.make_response('POST', CDN_SERIES_URL, data=data, headers=self._cdn_headers(url)).json()
+            playlist = common.parseDOM(response["episodes"], "ul", attrs={"class": "b-simple_episodes__list clearfix"})
+            return sum(len(common.parseDOM(block, "li")) for block in playlist)
+        except Exception as ex:
+            helpers.log(f'count translator episodes fault ex: {ex}')
+            return None
+
+    def _annotate_translators(self, titles, ids, directors, premium, post_id, url, current=None, with_counts=True):
+        display = list(titles)
+        counts = {}
+        if with_counts:
+            with helpers.busy_dialog():
+                for index, translator_id in enumerate(ids):
+                    if index >= len(display):
+                        break
+                    director = None
+                    if directors:
+                        try:
+                            director = directors[index]
+                        except Exception:
+                            director = None
+                    counts[index] = self._count_translator_episodes(post_id, translator_id, url, director)
+        for index, translator_id in enumerate(ids):
+            if index >= len(display):
+                break
+            if premium and index < len(premium) and premium[index]:
+                display[index] = '%s [%s]' % (display[index], self.language(30019))
+            if counts.get(index) is not None:
+                display[index] = '%s [%d]' % (display[index], counts[index])
+            if current is not None and translator_id == current:
+                display[index] = '* %s' % display[index]
+        return display
+
+    def select_translator_item(self, uri, via=None, atl=None, strm=None):
+        response = self.make_response('GET', uri)
+        if not response.text:
+            helpers.log('select_translator_item empty response, retrying')
+            response = self.make_response('GET', uri)
+            if not response.text:
+                return
+        content_list = common.parseDOM(response.text, "div", attrs={"class": "b-content__main"})
+        if not content_list:
+            helpers.log("select_translator_item fault parse main content")
+            return
+        try:
+            post_id = common.parseDOM(response.text, "input", attrs={"id": "post_id"}, ret="value")[0]
+        except Exception as ex:
+            helpers.log(f'select_translator_item fault post_id ex: {ex}')
+            return
+        titles, ids, directors, premium, active = self._parse_translators(content_list[0])
+        if not titles or not ids:
+            return
+        cached = self._get_cached_translator(post_id, ids)
+        atl_mode = (atl or '').lower() == 'true'
+        picked_id = None
+        if atl_mode:
+            # Headless opens never dialog: keep cached choice, else site-active.
+            current = cached if cached is not None else active
+            helpers.log('select_translator_item atl silent, kept translator %s' % current)
+        else:
+            is_series = bool(common.parseDOM(response.text, "div", attrs={"id": "simple-episodes-tabs"}))
+            display = self._annotate_translators(titles, ids, directors, premium, post_id, uri, cached, is_series)
+            dialog = xbmcgui.Dialog()
+            index_ = dialog.select(self.language(30006), display)
+            if int(index_) >= 0:
+                try:
+                    picked_name = titles[index_] if index_ < len(titles) else ''
+                    HDRezkaCache(self.profile).set_post_translation(post_id, ids[index_], picked_name)
+                    helpers.log('select_translator_item saved post %s translator %s' % (post_id, ids[index_]))
+                    picked_id = ids[index_]
+                except Exception as ex:
+                    helpers.log(f'select_translator_item fault save cache ex: {ex}')
+        if via == 'menu':
+            xbmc.executebuiltin(CONTAINER_REFRESH)
+        else:
             try:
-                page_html = self.client.request(url)
-                init_m = re.search(r'initCDNSeriesEvents\s*\(\s*\d+\s*,\s*(\d+)', page_html)
+                self.show(uri, (atl or '').lower() == 'true', strm)
+            except Exception as ex:
+                helpers.log(f'select_translator_item fault rebuild ex: {ex}')
+                xbmcplugin.endOfDirectory(self.handle, False)
+                return
+        # site sync is best-effort and always last: never block UI on it.
+        if picked_id is not None:
+            try:
+                self._push_translator_to_site(post_id, picked_id, uri)
+            except Exception as ex:
+                helpers.log(f'select_translator_item fault push ex: {ex}')
+
+    def _push_translator_to_site(self, post_id, translator_id, url):
+        try:
+            response = self.make_response('POST', '/ajax/send_watching/?t=', data={
+                'id': post_id,
+                'action': 'add',
+                'translator_id': translator_id,
+            }, headers=self._cdn_headers(url)).json()
+            helpers.log('send_watching response: %s' % response)
+        except Exception as ex:
+            helpers.log('send_watching fault ex: %s' % ex)
+
+    def select_translator(self, content, tv_show, post_id, url, idt, action, allow_dialog=False):
+        titles, ids, directors, premium, _active = self._parse_translators(content)
+        if not titles:
+            return tv_show, idt, None
+        cached = self._get_cached_translator(post_id, ids)
+        if cached is not None:
+            idt = cached
+        elif allow_dialog and ids and titles:
+            display = self._annotate_translators(titles, ids, directors, premium, post_id, url, cached, action != "get_movie")
+            dialog = xbmcgui.Dialog()
+            index_ = dialog.select(self.language(30006), display)
+            if 0 <= int(index_) < len(ids):
+                idt = ids[index_]
+                try:
+                    HDRezkaCache(self.profile).set_post_translation(post_id, idt, titles[index_])
+                except Exception as ex:
+                    helpers.log(f'select_translator fault save cache ex: {ex}')
+
+        data = {
+            "id": post_id,
+            "translator_id": idt,
+            "action": action
+        }
+        if directors:
+            try:
+                director = directors[ids.index(idt)]
+            except Exception:
+                director = None
+            if director:
+                data['is_director'] = director
+
+        headers = self._cdn_headers(url)
+        try:
+            response = self.make_response('POST', CDN_SERIES_URL, data=data, headers=headers).json()
+        except Exception as ex:
+            helpers.log(f'select_translator fault request ex: {ex}')
+            return tv_show, idt, None
+
+        subtitles = None
+        try:
+            if action == "get_movie":
+                playlist = [response["url"]]
+                subtitles = helpers.get_subtitles(response)
+            else:
+                episodes = response["episodes"]
+                playlist = common.parseDOM(episodes, "ul", attrs={"class": "b-simple_episodes__list clearfix"})
+        except Exception as ex:
+            helpers.log(f'select_translator fault playlist ex: {ex}')
+            return tv_show, idt, None
+        return playlist, idt, subtitles
+
+    def show(self, uri, atl_mode=False, strm=None):
+        response = self.make_response('GET', uri)
+
+        content_list = common.parseDOM(
+            response.text,
+            "div",
+            attrs={"class": "b-content__main"}
+        )
+
+        if not content_list:
+            helpers.log("fault parse main content")
+            return
+
+        content = content_list[0]
+        image = common.parseDOM(content, "img", attrs={"itemprop": "image"}, ret="src")[0]
+        title = common.parseDOM(content, "h1")[0]
+        post_id = common.parseDOM(response.text, "input", attrs={"id": "post_id"}, ret="value")[0]
+        translator_titles, translator_ids, _directors, translator_premium, translator_active = self._parse_translators(content)
+        has_translator_choice = bool(translator_titles and translator_ids)
+        idt = translator_active
+        if idt is None:
+            helpers.log('no active translator found')
+            idt = "0"
+            try:
+                init_m = re.search(r'initCDNSeriesEvents\s*\(\s*\d+\s*,\s*(\d+)', response.text)
                 if init_m:
                     idt = init_m.group(1)
                 else:
-                    t_list = parse_translators(page_html)
-                    if t_list:
-                        idt = t_list[0]["id"]
-            except Exception as e:
-                log(f"Failed to find translator ID for episode: {e}")
+                    idt = response.text.split("sof.tv.initCDNSeriesEvents")[-1].split("{")[0]
+                    idt = idt.split(",")[1].strip()
+            except Exception as ex:
+                helpers.log(f'fault search CDN ex: {ex}')
+        if not idt.isdigit():
+            helpers.log('fault translator id, using default: %s' % idt)
+            idt = "0"
+        subtitles = None
+        tv_show = common.parseDOM(response.text, "div", attrs={"id": "simple-episodes-tabs"})
+        if not tv_show:
+            tv_show = common.parseDOM(response.text, "ul", attrs={"id": "simple-episodes-tabs"})
+        if not tv_show and ("initCDNSeriesEvents" in response.text or "/series/" in uri):
+            tv_show = common.parseDOM(response.text, "ul", attrs={"class": "b-simple_episodes__list"}) or [response.text]
+        if tv_show:
+            if has_translator_choice:
+                self._add_translator_item(translator_titles, translator_ids, translator_premium, post_id, idt, uri)
+            tv_show, idt, subtitles = self.select_translator(content, tv_show, post_id, uri, idt, "get_episodes", allow_dialog=not atl_mode and self.translator == 'select')
+            titles = common.parseDOM(tv_show, "li")
+            ids = common.parseDOM(tv_show, "li", ret='data-id')
+            seasons = common.parseDOM(tv_show, "li", ret='data-season_id')
+            episodes = common.parseDOM(tv_show, "li", ret='data-episode_id')
 
-        subtitles = []
-        if not data or data == "null":
-            headers = {
-                "X-Requested-With": "XMLHttpRequest",
-                "Referer": url,
-                "Origin": self.client.base_url
-            }
-            req_data = {
-                "id": post_id,
-                "translator_id": idt,
-                "season": season_id,
-                "episode": episode_id,
-                "action": "get_stream"
-            }
-            ajax_url = f"{self.client.base_url}/ajax/get_cdn_series/"
-
-            try:
-                resp_str = self.client.request(ajax_url, data=req_data, headers=headers)
-                res = json.loads(resp_str)
-                if not res.get("success"):
-                    msg = res.get("message", "Ошибка получения потока")
-                    log(f"get_cdn_series returned success=False: {msg}")
-                    xbmcgui.Dialog().notification("HDRezka", msg, self.icon, 3000)
+            for title_, episode_post_id, season_id, episode_id in zip(titles, ids, seasons, episodes):
+                if atl_mode:
+                    try:
+                        season_no = int(season_id)
+                        episode_no = int(episode_id)
+                    except (TypeError, ValueError):
+                        season_no = 0
+                        episode_no = 0
+                    label = "%s.s%02de%02d" % (title.strip(), season_no, episode_no)
+                    episode_title = title
+                else:
+                    label = f"{title_} ({self.language(30005)} {season_id})"
+                    episode_title = title_
+                url_episode = uri
+                # Library URLs carry ids alone; title/image serve the quality picker only.
+                slim = atl_mode
+                item_uri = router.build_uri(
+                    'play_episode',
+                    url=url_episode,
+                    post_id=episode_post_id,
+                    season_id=season_id,
+                    episode_id=episode_id,
+                    title=None if slim else episode_title,
+                    image=None if slim else image,
+                    idt=idt,
+                    strm='1' if atl_mode else None,
+                )
+                item = xbmcgui.ListItem(label)
+                item.setArt({'thumb': image, 'icon': image})
+                item.setInfo(type='Video', infoLabels={'title': label})
+                if has_translator_choice:
+                    item.addContextMenuItems(self._translator_menu(uri))
+                if self.quality != 'select' or atl_mode:
+                    item.setProperty('IsPlayable', 'true')
+                xbmcplugin.addDirectoryItem(self.handle, item_uri, item, False if self.quality != 'select' or atl_mode else True)
+        else:
+            content = [response.text]
+            if has_translator_choice:
+                self._add_translator_item(translator_titles, translator_ids, translator_premium, post_id, idt, uri)
+            # Movie pages are never scanned headless, so asking on miss is safe.
+            content, idt, subtitles = self.select_translator(content[0], content, post_id, uri, idt, "get_movie", allow_dialog=True)
+            if subtitles is None:
+                # when action == get_movie, None is returned only when some exception occurs,
+                # so we set the streams_block to default
+                streams_match = re.search(r'"streams":"([^"]+)', response.text)
+                if not streams_match:
+                    helpers.log('fault streams block')
                     return
-                data = res.get("url", "")
-                subtitles = parse_subtitles(res)
-            except Exception as e:
-                log(f"Error fetching episode stream: {e}")
-                xbmcgui.Dialog().notification("HDRezka", f"Ошибка потока: {e}", self.icon, 3000)
-                return
-
-        links = parse_stream_links(data)
-        if not links:
-            xbmcgui.Dialog().ok("HDRezka", "Не удалось извлечь видеопоток серии.")
-            return
-
-        self._choose_quality_and_play(links, title, poster, subtitles)
-
-    def _choose_quality_and_play(self, links, title, poster, subtitles=None):
-        """Selects quality and resolves stream for playback."""
-        # Sort links by quality weight
-        sorted_qualities = sorted(links.keys(), key=lambda q: QUALITY_WEIGHTS.get(q, 0), reverse=True)
-        if not sorted_qualities:
-            xbmcgui.Dialog().ok("HDRezka", "Потоки недоступны.")
-            if self.handle > 0:
-                xbmcplugin.setResolvedUrl(self.handle, False, xbmcgui.ListItem())
-            return
-
-        selected_url = None
-        if self.quality_pref != "select":
-            pref_weight = QUALITY_WEIGHTS.get(self.quality_pref, 999)
-            # Find best match <= pref_weight
-            for q in sorted_qualities:
-                if QUALITY_WEIGHTS.get(q, 0) <= pref_weight:
-                    selected_url = links[q]
-                    log(f"Auto-selected quality '{q}' based on preference '{self.quality_pref}'")
-                    break
-
-        if not selected_url:
-            if len(sorted_qualities) == 1:
-                selected_url = links[sorted_qualities[0]]
+                streams_block = streams_match.group(1)
             else:
-                dialog = xbmcgui.Dialog()
-                idx = dialog.select(self.get_string(30011), sorted_qualities)
-                if idx < 0:
-                    if self.handle > 0:
-                        xbmcplugin.setResolvedUrl(self.handle, False, xbmcgui.ListItem())
-                    return
-                selected_url = links[sorted_qualities[idx]]
+                # success, get selected translator streams
+                streams_block = content[0]
+            links = parse_streams(streams_block)
+            play_info = {
+                'post_id': post_id,
+                'translator_id': idt,
+                'season': 0,
+                'episode': 0,
+            }
+            self.select_quality(links, title, image, subtitles, '1' if strm == '1' else None, play_info)
 
-        self.play_stream(selected_url, title, subtitles)
+        xbmcplugin.setContent(self.handle, 'episodes')
+        xbmcplugin.endOfDirectory(self.handle, True)
 
-    def play_stream(self, stream_url, title=None, subtitles=None):
-        """
-        Prepares the ListItem with proper headers for Voidboost/CDN and starts playback.
-        """
-        if not stream_url:
-            if self.handle > 0:
-                xbmcplugin.setResolvedUrl(self.handle, False, xbmcgui.ListItem())
-            return
-
-        # Append headers required by Voidboost/CDN for playback without 403 blocks
-        headers = {
-            "User-Agent": self.client.user_agent,
-            "Referer": f"{self.client.base_url}/"
+    def get_item_additional_info(self, post_id):
+        additional = {
+            'rating': {
+                'site': '',
+                'imdb': '',
+                'kp': ''
+            },
+            'age_limit': '',
+            'description': ''
         }
-        encoded_headers = urllib.parse.urlencode(headers)
-        playback_url = f"{stream_url}|{encoded_headers}"
+        if not self.show_description:
+            return additional
 
-        log(f"Starting playback for: {playback_url}")
+        try:
+            cached = HDRezkaCache(self.profile).get_bubble(post_id, BUBBLE_CACHE_TTL)
+        except Exception as ex:
+            helpers.log(f'get bubble cache fault ex: {ex}')
+            cached = None
+        if cached is not None:
+            return cached
+
+        response = self.make_response('POST', '/engine/ajax/quick_content.php', data={
+            "id": post_id,
+            "is_touch": 1
+        })
+
+        try:
+            additional['description'] = common.parseDOM(response.text, 'div', attrs={'class': 'b-content__bubble_text'})[0]
+        except IndexError:
+            helpers.log(f'fault parse description post_id: {post_id}', xbmc.LOGDEBUG)
+
+        try:
+            additional['age_limit'] = re.search(r'<b style="color: #333;">(\d+\+)</b>', response.text).group(1)
+        except AttributeError:
+            helpers.log(f'fault parse age_limit post_id: {post_id}', xbmc.LOGDEBUG)
+
+        try:
+            site_rating = common.parseDOM(response.text, 'div', attrs={'class': 'b-content__bubble_rating'})[0]
+            additional['rating']['site'] = common.parseDOM(site_rating, 'b')[0]
+        except IndexError:
+            helpers.log(f'fault parse site rating post_id: {post_id}', xbmc.LOGDEBUG)
+
+        try:
+            imdb_rating_block = common.parseDOM(response.text, 'span', attrs={'class': 'imdb'})[0]
+            imdb_rating = common.parseDOM(imdb_rating_block, 'b')[0]
+            additional['rating']['imdb'] = imdb_rating
+            additional['description'] = f'IMDb: {helpers.color_rating(imdb_rating)}\n{additional["description"]}'
+        except IndexError:
+            helpers.log(f'fault parse imdb rating post_id: {post_id}', xbmc.LOGDEBUG)
+
+        try:
+            kp_rating_block = common.parseDOM(response.text, 'span', attrs={'class': 'kp'})[0]
+            kp_rating = common.parseDOM(kp_rating_block, 'b')[0]
+            additional['rating']['kp'] = kp_rating
+            additional['description'] = f' Кинопоиск: {helpers.color_rating(kp_rating)}\n{additional["description"]}'
+        except IndexError:
+            helpers.log(f'fault parse kp rating post_id: {post_id}', xbmc.LOGDEBUG)
+
+        try:
+            HDRezkaCache(self.profile).set_bubble(post_id, additional, BUBBLE_CACHE_TTL)
+        except Exception as ex:
+            helpers.log(f'set bubble cache fault ex: {ex}')
+
+        return additional
+
+    def history(self):
+        words = history.get_history()
+        for word in reversed(words):
+            uri = router.build_uri('search', keyword=word, main=1)
+            item = xbmcgui.ListItem(word)
+            item.setArt({'thumb': self.icon, 'icon': self.icon})
+            item.addContextMenuItems([(self.language(30015), RUN_PLUGIN_FMT % router.build_uri('history_delete', keyword=word))])
+            xbmcplugin.addDirectoryItem(self.handle, uri, item, True)
+        xbmcplugin.endOfDirectory(self.handle, True)
+
+    def delete_history(self, keyword):
+        if keyword:
+            history.delete_from_history(keyword)
+            xbmcgui.Dialog().notification(self.addon.getAddonInfo('name'), self.language(30017), self.icon)
+        xbmc.executebuiltin(CONTAINER_REFRESH)
+
+    def delete_continue(self, data_id):
+        if data_id:
+            response = self.make_response('POST', '/engine/ajax/cdn_saves_remove.php', data={'id': data_id})
+            helpers.log(f'continues remove response: {response.status_code}')
+            xbmcgui.Dialog().notification(self.addon.getAddonInfo('name'), self.language(30018), self.icon)
+        xbmc.executebuiltin(CONTAINER_REFRESH)
+
+    def continues(self):
+        response = self.make_response('GET', '/continue/')
+        genres = common.parseDOM(response.text, "div", attrs={"class": "b-videosaves__list_item"})
+        titles = common.parseDOM(genres, "div", attrs={"class": "td title"})
+        info = common.parseDOM(genres, "div", attrs={"class": "td info"})
+        controls = common.parseDOM(genres, "div", attrs={"class": "td controls"})
+        try:
+            translator_cache = HDRezkaCache(self.profile)
+        except Exception as ex:
+            helpers.log(f'continues fault cache ex: {ex}')
+            translator_cache = None
+
+        progress_pattern = re.compile(r'^'
+                                      r'(?:(.*?)(?=\s*(?:\d+\s*сезон|\d+\s*серия|смотреть|$)))?'
+                                      r'(?:\s*(\d+)\s*сезон)?'
+                                      r'(?:\s*(\d+)\s*серия)?'
+                                      r'(?:\s*(\(.*?\)))?'
+                                      r'(?:\s*смотреть\s*ещё\s*(\d+))?'
+                                      r'(?:\s*смотреть\s*следующий\s*(\d+))?'
+                                      r'.*?$', re.IGNORECASE | re.UNICODE | re.VERBOSE)
+
+        for i, title_html in enumerate(titles):
+            try:
+                if i >= len(info):
+                    continue
+                try:
+                    year = (common.parseDOM(title_html, "small")[0])[1:5]
+                except (IndexError, TypeError):
+                    year = ''
+                try:
+                    link_title = common.parseDOM(title_html, "a")[0]
+                except IndexError:
+                    continue
+                episodes_text = common.stripTags(info[i])
+                match = progress_pattern.match(episodes_text)
+
+                result = None
+                if match:
+                    result = list(match.groups())
+                    result = [x.strip() if x and j in (0, 3) else x for j, x in enumerate(result)]
+                    result = [x if x and x.strip() else None for x in result]
+
+                episodes = None
+                translate = None
+                season = None
+                episode = None
+                episode_new = None
+                season_new = None
+                if result is not None and len(result) == 6:
+                    if result[0] is not None:
+                        translate = '(%s)' % result[0]
+                    if result[1] is not None:
+                        season = result[1]
+                    if result[2] is not None:
+                        episode = result[2]
+                    if result[3] is not None:
+                        translate = result[3]
+                    if result[4] is not None:
+                        episode_new = result[4]
+                    if result[5] is not None:
+                        season_new = result[5]
+
+                if season and episode:
+                    episodes = '[s%se%s]' % (season, episode)
+                    if episode_new:
+                        episodes = episodes.replace(']', '')
+                        episodes = '%s - новых %s в сезоне]' % (episodes, episode_new)
+                    if season_new:
+                        episodes = episodes.replace(']', '')
+                        episodes = '%s - новый %sй сезон]' % (episodes, season_new)
+
+                try:
+                    item_link = common.parseDOM(info[i], "a", ret='href')[0]
+                except IndexError:
+                    try:
+                        item_link = common.parseDOM(title_html, "a", ret='href')[0]
+                    except IndexError:
+                        continue
+                if translator_cache is not None:
+                    try:
+                        show_post_id = re.search(r'/(\d+)-', item_link).group(1)
+                        cached_name = translator_cache.get_post_translation_name(show_post_id)
+                    except Exception:
+                        cached_name = None
+                    if cached_name:
+                        translate = cached_name
+                label = '%s [COLOR=lawngreen](%s)[/COLOR]%s%s' % (
+                    link_title,
+                    year,
+                    '[COLOR=gold]%s[/COLOR]' % translate if translate is not None else '',
+                    '[COLOR=cyan]%s[/COLOR]' % episodes if episodes is not None else ''
+                )
+                item_uri = router.build_uri('show', uri=router.normalize_uri(item_link))
+                item = xbmcgui.ListItem(label)
+                try:
+                    thumb = self._normalize_url(common.parseDOM(title_html, "a", ret='data-cover_url')[0])
+                except IndexError:
+                    thumb = self.icon
+                item.setArt({'thumb': thumb, 'icon': thumb})
+                item.setInfo(type='video', infoLabels={'title': label, 'year': year})
+                try:
+                    save_id = common.parseDOM(controls[i], "a", attrs={"class": "i-sprt delete"}, ret='data-id')[0]
+                except (IndexError, TypeError):
+                    save_id = None
+                menu_items = []
+                if save_id:
+                    menu_items.append((self.language(30016), RUN_PLUGIN_FMT % router.build_uri('continue_delete', id=save_id)))
+                menu_items.extend(self._translator_menu(router.normalize_uri(item_link)))
+                item.addContextMenuItems(menu_items)
+                is_serial = bool(episodes)
+                is_folder = True
+                if (self.quality != 'select') and not is_serial:
+                    item.setProperty('IsPlayable', 'true')
+                    is_folder = False
+                xbmcplugin.addDirectoryItem(self.handle, item_uri, item, is_folder)
+            except Exception as ex:
+                helpers.log(f'continues fault item ex: {ex}')
+                continue
+
+        xbmcplugin.setContent(self.handle, 'movies')
+        xbmcplugin.endOfDirectory(self.handle, True)
+
+    def get_user_input(self):
+        kbd = xbmc.Keyboard()
+        kbd.setDefault('')
+        kbd.setHeading(self.language(30000))
+        kbd.doModal()
+        keyword = None
+
+        if kbd.isConfirmed():
+            if self.use_transliteration:
+                keyword = transliterate.rus(kbd.getText())
+            else:
+                keyword = kbd.getText()
+
+            history.add_to_history(keyword)
+
+        return keyword
+
+    def search(self, keyword, external):
+        helpers.log(f'*** search keyword: {keyword} external: {external}')
+
+        keyword = urllib.parse.unquote_plus(keyword) if (external is not None) else self.get_user_input()
+        if not keyword:
+            return self.menu()
+
+        params = {
+            "do": "search",
+            "subaction": "search",
+            "q": str(keyword)
+        }
+        response = self.make_response('GET', '/search/', params=params, cookies={"dle_user_taken": '1'})
+
+        content = common.parseDOM(response.text, "div", attrs={"class": "b-content__inline_items"})
+        items = common.parseDOM(content, "div", attrs={"class": "b-content__inline_item"})
+        post_ids = common.parseDOM(content, "div", attrs={"class": "b-content__inline_item"}, ret="data-id")
+        link_containers = common.parseDOM(items, "div", attrs={"class": "b-content__inline_item-link"})
+        links = common.parseDOM(link_containers, "a", ret='href')
+        titles = common.parseDOM(link_containers, "a")
+
+        for i, name in enumerate(titles):
+            info = self.get_item_additional_info(post_ids[i])
+            country_divs = common.parseDOM(link_containers[i], "div")
+            country_text = country_divs[0] if country_divs else ''
+            title = helpers.built_title(name, country_text, **info)
+            image = self._normalize_url(common.parseDOM(items[i], "img", ret='src')[0])
+            item_uri = router.build_uri('show', uri=router.normalize_uri(links[i]))
+            year, country, genre = helpers.get_media_attributes(country_text)
+            is_serial = common.parseDOM(items[i], 'span', attrs={"class": "info"})
+            item = xbmcgui.ListItem(title)
+            item.setArt({'thumb': image, 'icon': image})
+            item.addContextMenuItems(self._translator_menu(router.normalize_uri(links[i])))
+            info_labels = {
+                'title': title,
+                'genre': genre,
+                'country': country,
+                'plot': info['description'],
+                'rating': info['rating']['site']
+            }
+            if year:
+                info_labels['year'] = year
+            if info['age_limit']:
+                info_labels['mpaa'] = info['age_limit']
+            item.setInfo(type='video', infoLabels=info_labels)
+            is_folder = True
+            if (self.quality != 'select') and not is_serial:
+                item.setProperty('IsPlayable', 'true')
+                is_folder = False
+            xbmcplugin.addDirectoryItem(self.handle, item_uri, item, is_folder)
+
+        xbmcplugin.setContent(self.handle, 'movies')
+        xbmcplugin.endOfDirectory(self.handle, True)
+
+    def play(self, url, subtitles=None, play_info=None, title=None):
+        helpers.log(f'*** play url: {url} subtitles: {subtitles}')
+
+        if url and '|' not in url:
+            headers = urllib.parse.urlencode({
+                'User-Agent': USER_AGENT,
+                'Referer': f"{self.url}/"
+            })
+            playback_url = f"{url}|{headers}"
+        else:
+            playback_url = url
 
         item = xbmcgui.ListItem(path=playback_url)
-        if title:
-            item.setLabel(title)
-            set_video_info(item, {"title": title})
-
-        # Set MIME type and properties for instant playback without probing
-        if ".m3u8" in stream_url:
-            item.setMimeType("application/vnd.apple.mpegurl")
-            item.setProperty("inputstream", "inputstream.adaptive")
-            item.setProperty("inputstream.adaptive.manifest_type", "hls")
-        else:
-            item.setMimeType("video/mp4")
-
         item.setContentLookup(False)
-
-        # Attach subtitles if available
-        if subtitles:
-            sub_urls = [s["url"] for s in subtitles if s.get("url")]
-            if sub_urls:
-                log(f"Attaching subtitles: {sub_urls}")
-                item.setSubtitles(sub_urls)
-
-        if self.handle > 0:
-            xbmcplugin.setResolvedUrl(self.handle, succeeded=True, listitem=item)
+        if '.m3u8' in (url or ''):
+            item.setMimeType('application/vnd.apple.mpegurl')
+            item.setProperty('inputstream', 'inputstream.adaptive')
+            item.setProperty('inputstream.adaptive.manifest_type', 'hls')
         else:
-            xbmc.Player().play(playback_url, item)
+            item.setMimeType('video/mp4')
+
+        if title:
+            osd_title = re.sub(r'\s*\(\d{4}\)\s*$', '', title)
+            item.setInfo(type='Video', infoLabels={'title': osd_title or title})
+        if play_info:
+            # HDRezkaPlayer sees only the resolved item: attach all ids here.
+            item.setProperty('addon_id', self.id)
+            for key, value in play_info.items():
+                item.setProperty(key, '%s' % value)
+        helpers.set_item_subtitles(item, subtitles)
+        xbmcplugin.setResolvedUrl(self.handle, True, item)
+
+    def play_episode(self, url, post_id, season_id, episode_id, title=None, image=None, idt=None, strm=None, show_id=None):
+        if show_id is not None:
+            try:
+                cached = HDRezkaCache(self.profile).get_post_translation(show_id)
+            except Exception as ex:
+                helpers.log(f'play_episode fault read cache ex: {ex}')
+                cached = None
+            if cached is not None:
+                idt = cached
+        if not idt or idt == "0":
+            try:
+                page_res = self.make_response('GET', url)
+                init_m = re.search(r'initCDNSeriesEvents\s*\(\s*\d+\s*,\s*(\d+)', page_res.text)
+                if init_m:
+                    idt = init_m.group(1)
+            except Exception as ex:
+                helpers.log(f'play_episode fallback idt ex: {ex}')
+
+        data = {
+            "id": post_id,
+            "translator_id": idt,
+            "season": season_id,
+            "episode": episode_id,
+            "action": "get_stream"
+        }
+        safe_referer = urllib.parse.quote(url, safe=":/%?&=#+@*~,;!-._") if url else f"{self.url}/"
+        headers = {
+            "Host": self.domain,
+            "Origin": self.url,
+            "Referer": safe_referer,
+            "User-Agent": USER_AGENT,
+            "X-Requested-With": "XMLHttpRequest"
+        }
+        resp = self.make_response('POST', CDN_SERIES_URL, data=data, headers=headers)
+        response = resp.json()
+        if not response.get("success"):
+            msg = response.get("message", "Ошибка получения потока")
+            helpers.log(f"get_cdn_series returned success=False: {msg}")
+            xbmcgui.Dialog().notification("HDRezka", msg, self.icon, 3000)
+            xbmcplugin.setResolvedUrl(self.handle, False, xbmcgui.ListItem())
+            return
+
+        data = response["url"]
+        subtitles = helpers.get_subtitles(response)
+        links = parse_streams(data)
+        play_info = {
+            'post_id': post_id,
+            'translator_id': idt,
+            'season': season_id,
+            'episode': episode_id,
+        }
+        self.select_quality(links, title, image, subtitles, strm, play_info)
+        xbmcplugin.setContent(self.handle, 'episodes')
+        xbmcplugin.endOfDirectory(self.handle, True)
+
+    def _normalize_url(self, item):
+        if not item.startswith("http"):
+            item = self.url + item
+        return item
 
 
-if __name__ == "__main__":
-    addon = HDRezkaAddon()
-    addon.run()
+def main():
+    plugin = HdrezkaTV()
 
+    action = sys.argv[2]
+    if action == 'authorize':
+        actions.authorize(plugin)
+    elif action == 'external_config_update':
+        actions.external_config_update(plugin)
+    else:
+        plugin.main(action)
+
+if __name__ == '__main__':
+    main()

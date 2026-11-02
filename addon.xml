@@ -1,23 +1,22 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="plugin.video.hdrezka.tv" name="HDRezka" version="3.0.2" provider-name="MrStealth, dandy, DesSolo, Antigravity">
+<addon id="plugin.video.hdrezka.tv" name="Hdrezka.tv" version="3.3.1" provider-name="MrStealth, dandy, DesSolo, DayAnger">
     <requires>
         <import addon="xbmc.python" version="3.0.0"/>
+        <import addon="script.module.requests"/>
+        <import addon="script.module.inputstreamhelper" optional="true"/>
     </requires>
-    <extension point="xbmc.python.pluginsource" library="default.py">
+    <extension point="xbmc.python.pluginsource" provides="video" library="default.py">
         <provides>video</provides>
     </extension>
+    <extension point="xbmc.service" library="service.py"/>
     <extension point="xbmc.addon.metadata">
-        <summary lang="ru_RU">HDRezka</summary>
-        <summary lang="en_GB">HDRezka</summary>
-        <description lang="ru_RU">HDREZKA - Фильмы, сериалы и мультфильмы в высоком качестве с поддержкой зеркал, авторизации и автоматическим обходом блокировок и бот-защиты (Anubis PoW).</description>
-        <description lang="en_GB">HDREZKA - Movies and TV series with mirror support, account authorization, and automated bot-protection bypass.</description>
+        <summary>Hdrezka.tv</summary>
+        <description>HDREZKA.TV - Фильмы, мультфильмы и сериалы в высоком качестве</description>
+        <description>For personal use only</description>
         <platform>all</platform>
-        <license>GPL-3.0-only</license>
-        <source>https://github.com/dandygithub/kodi</source>
         <assets>
             <icon>icon.png</icon>
             <fanart>fanart.jpg</fanart>
         </assets>
     </extension>
 </addon>
-

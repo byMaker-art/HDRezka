@@ -1,192 +1,98 @@
 # Kodi Media Center language file
-# Addon Name: HDRezka
+# Addon Name: Hdrezka.tv
 # Addon id: plugin.video.hdrezka.tv
+# Addon Provider: ffoxin
+
 msgid ""
 msgstr ""
+"Project-Id-Version: Kodi Addons\n"
+"Report-Msgid-Bugs-To: alanwww1@kodi.org\n"
+"POT-Creation-Date: 2021-03-01 01:28+0300\n"
+"PO-Revision-Date: 2021-03-01 01:28+0300\n"
+"Last-Translator: ffoxin\n"
+"Language-Team: Russian (http://xbmc.ru/forum/showthread.php?t=12438)\n"
+"MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Language: ru_RU\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-# Legacy string IDs for backward compatibility
-msgctxt "#1000"
-msgid "Поиск"
-msgstr "Поиск"
-
-msgctxt "#1001"
-msgid "К сожалению, поиск по сайту не дал никаких результатов."
-msgstr "К сожалению, поиск по сайту не дал никаких результатов."
-
-msgctxt "#1002"
-msgid "Использовать транслитерацию при поиске"
-msgstr "Использовать транслитерацию при поиске"
-
-msgctxt "#1003"
-msgid "Категории"
-msgstr "Категории"
-
-msgctxt "#1004"
-msgid "Следующая страница..."
-msgstr "Следующая страница..."
-
-msgctxt "#1005"
-msgid "Сезон"
-msgstr "Сезон"
-
-msgctxt "#1006"
-msgid "Выбрать озвучку"
-msgstr "Выбрать озвучку"
-
-msgctxt "#1007"
-msgid "Список"
-msgstr "Список"
-
-msgctxt "#1008"
-msgid "История поиска"
-msgstr "История поиска"
-
-# Addon menu strings
 msgctxt "#30000"
 msgid "Поиск"
-msgstr "Поиск"
+msgstr ""
 
 msgctxt "#30001"
-msgid "История поиска"
-msgstr "История поиска"
+msgid "К сожалению, поиск по сайту не дал никаких результатов."
+msgstr ""
 
 msgctxt "#30002"
-msgid "Категории"
-msgstr "Категории"
+msgid "Использовать транслитерацию при поиске"
+msgstr ""
 
 msgctxt "#30003"
-msgid "Мои закладки (на сайте)"
-msgstr "Мои закладки (на сайте)"
+msgid "Категории"
+msgstr ""
 
 msgctxt "#30004"
-msgid "Фильмы"
-msgstr "Фильмы"
+msgid "Следующая страница ..."
+msgstr ""
 
 msgctxt "#30005"
-msgid "Сериалы"
-msgstr "Сериалы"
+msgid "Сезон"
+msgstr ""
 
 msgctxt "#30006"
-msgid "Мультфильмы"
-msgstr "Мультфильмы"
+msgid "Выбрать озвучку"
+msgstr ""
 
 msgctxt "#30007"
-msgid "Аниме"
-msgstr "Аниме"
+msgid "Список"
+msgstr ""
 
 msgctxt "#30008"
-msgid "Подборки"
-msgstr "Подборки"
+msgid "История поиска"
+msgstr ""
 
 msgctxt "#30009"
-msgid "Очистить историю поиска"
-msgstr "Очистить историю поиска"
+msgid "Последние поступления"
+msgstr ""
 
 msgctxt "#30010"
-msgid "Выбрать озвучку"
-msgstr "Выбрать озвучку"
+msgid "Популярные"
+msgstr ""
 
 msgctxt "#30011"
-msgid "Выбрать качество"
-msgstr "Выбрать качество"
+msgid "В ожидании"
+msgstr ""
 
 msgctxt "#30012"
-msgid "Вход выполнен успешно!"
-msgstr "Вход выполнен успешно!"
+msgid "Сейчас смотрят"
+msgstr ""
 
 msgctxt "#30013"
-msgid "Ошибка авторизации"
-msgstr "Ошибка авторизации"
+msgid "Продолжить просмотр"
+msgstr ""
 
 msgctxt "#30014"
-msgid "Вход не выполнен. Проверьте логин и пароль в настройках."
-msgstr "Вход не выполнен. Проверьте логин и пароль в настройках."
+msgid "Перевод: %s"
+msgstr ""
 
 msgctxt "#30015"
-msgid "Обход защиты Anubis..."
-msgstr "Обход защиты Anubis..."
+msgid "Удалить из истории"
+msgstr ""
 
-# Settings strings
-msgctxt "#30100"
-msgid "Основные"
-msgstr "Основные"
+msgctxt "#30016"
+msgid "Удалить из Продолжить просмотр"
+msgstr ""
 
-msgctxt "#30101"
-msgid "Адрес сайта / зеркало"
-msgstr "Адрес сайта / зеркало"
+msgctxt "#30017"
+msgid "Успешно удалено из истории"
+msgstr ""
 
-msgctxt "#30102"
-msgid "Например: kinopub.me или rezka.ag"
-msgstr "Например: kinopub.me или rezka.ag"
+msgctxt "#30018"
+msgid "Успешно удалено из Продолжить просмотр"
+msgstr ""
 
-msgctxt "#30103"
-msgid "Протокол"
-msgstr "Протокол"
-
-msgctxt "#30104"
-msgid "Качество видео"
-msgstr "Качество видео"
-
-msgctxt "#30105"
-msgid "Всегда спрашивать"
-msgstr "Всегда спрашивать"
-
-msgctxt "#30106"
-msgid "Озвучка / Перевод"
-msgstr "Озвучка / Перевод"
-
-msgctxt "#30107"
-msgid "Всегда спрашивать"
-msgstr "Всегда спрашивать"
-
-msgctxt "#30108"
-msgid "По умолчанию (первая в списке)"
-msgstr "По умолчанию (первая в списке)"
-
-msgctxt "#30109"
-msgid "Загружать описание и рейтинг"
-msgstr "Загружать описание и рейтинг"
-
-msgctxt "#30120"
-msgid "Аккаунт HDRezka"
-msgstr "Аккаунт HDRezka"
-
-msgctxt "#30121"
-msgid "Включить авторизацию"
-msgstr "Включить авторизацию"
-
-msgctxt "#30122"
-msgid "Логин или E-mail"
-msgstr "Логин или E-mail"
-
-msgctxt "#30123"
-msgid "Пароль"
-msgstr "Пароль"
-
-msgctxt "#30124"
-msgid "Проверить авторизацию / Войти"
-msgstr "Проверить авторизацию / Войти"
-
-msgctxt "#30140"
-msgid "Прокси"
-msgstr "Прокси"
-
-msgctxt "#30141"
-msgid "Использовать прокси"
-msgstr "Использовать прокси"
-
-msgctxt "#30142"
-msgid "Тип прокси"
-msgstr "Тип прокси"
-
-msgctxt "#30143"
-msgid "Адрес прокси"
-msgstr "Адрес прокси"
-
-msgctxt "#30144"
-msgid "Формат: host:port или user:password@host:port"
-msgstr "Формат: host:port или user:password@host:port"
-
+msgctxt "#30019"
+msgid "Премиум"
+msgstr ""

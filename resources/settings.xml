@@ -1,21 +1,31 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <settings>
-    <category label="Основные">
-        <setting id="domain" type="text" label="Адрес сайта / зеркало" default="kinopub.me"/>
-        <setting id="dom_protocol" type="labelenum" label="Протокол" values="https|http" default="https"/>
-        <setting id="quality" type="labelenum" label="Качество видео" values="select|360p|480p|720p|1080p|1080p Ultra|2K|4K" default="select"/>
-        <setting id="translator" type="labelenum" label="Озвучка / Перевод" values="select|default" default="select"/>
-        <setting id="description" type="bool" label="Загружать описание и рейтинг" default="true"/>
+    <category label="Default">
+        <setting id="use_transliteration" type="bool" label="Use transliteration" default="false" />
+        <setting id="quality" type="labelenum" label="Video quality" values="select|360p|480p|720p|1080p|1080p Ultra|1440p|2160p" default="select"/>
+        <setting id="translator" type="labelenum" label="Use translator" values="default|select" default="default"/>
+        <setting id="dom_protocol" type="labelenum" label="Protocol" values="http|https" default="https"/>        
+        <setting id="domain" type="text" label="Site URL" default="kinopub.me"/>
+        <setting id="show_description" type="bool" label="Get media description" default="true" />
+        <setting id="use_atl_names" type="bool" label="Use titles for 'Add To Lib'" default="false" />
+        <setting type="bool" id="united_search" visible="false" default="true" />
+        <setting type="text" id="us_command" visible="false" default="mode=search&keyword=" />
     </category>
-    <category label="Аккаунт HDRezka">
-        <setting id="auth_enabled" type="bool" label="Включить авторизацию" default="false"/>
-        <setting id="username" type="text" label="Логин или E-mail" default="" enable="eq(-1,true)"/>
-        <setting id="password" type="text" option="hidden" label="Пароль" default="" enable="eq(-2,true)"/>
-        <setting id="login_action" type="action" label="Проверить авторизацию / Войти" action="RunPlugin(plugin://plugin.video.hdrezka.tv/?mode=login_action)" enable="eq(-3,true)"/>
+    <category label="Authorization">
+        <setting id="username" type="text" label="Username" />
+        <setting id="password" type="text" label="Password" option="hidden" />
+        <setting id="cookies" type="text" visible="false" label="Authorization cookies" />
+        <setting type="sep"/>
+        <setting type="action" label="Authorize" action="RunScript(plugin.video.hdrezka.tv, 0, authorize)" />
     </category>
-    <category label="Прокси">
-        <setting id="use_proxy" type="bool" label="Использовать прокси" default="false"/>
-        <setting id="protocol" type="labelenum" label="Тип прокси" values="http|socks5" default="http" enable="eq(-1,true)"/>
-        <setting id="proxy_url" type="text" label="Адрес прокси (host:port или user:pass@host:port)" default="" enable="eq(-2,true)"/>
+    <category label="Proxy settings">
+        <setting id="use_proxy" type="bool" label="Use proxy settings" default="false" />
+        <setting id="protocol" type="labelenum" label="Protocol" values="http|https|socks5" default="http"/>
+        <setting id="proxy_url" type="text" label="URL" default="USERNAME:PASSWORD@IPADDRESS:PORT"/>
+    </category>
+    <category label="External config">
+        <setting id="external_config_url" type="text" label="URL"/>
+        <setting type="sep"/>
+        <setting type="action" label="Update" action="RunScript(plugin.video.hdrezka.tv, 0, external_config_update)" />
     </category>
 </settings>
