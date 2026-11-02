@@ -693,3 +693,4 @@ class HDRezkaAddon:
 if __name__ == "__main__":
     addon = HDRezkaAddon()
     addon.run()
+

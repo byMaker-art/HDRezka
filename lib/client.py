@@ -347,3 +347,4 @@ class RezkaClient:
             if cookie.name in ("dle_user_id", "dle_user_token") and cookie.value:
                 return True
         return False
+

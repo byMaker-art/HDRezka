@@ -1,97 +1,21 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
-<settings version="1">
-    <section id="plugin.video.hdrezka.tv">
-        <category id="general" label="30100">
-            <group id="1">
-                <setting id="domain" type="string" label="30101" help="30102">
-                    <default>kinopub.me</default>
-                    <constraints>
-                        <allowempty>false</allowempty>
-                    </constraints>
-                </setting>
-                <setting id="dom_protocol" type="string" label="30103">
-                    <level>0</level>
-                    <default>https</default>
-                    <constraints>
-                        <options>
-                            <option label="HTTPS">https</option>
-                            <option label="HTTP">http</option>
-                        </options>
-                    </constraints>
-                </setting>
-                <setting id="quality" type="string" label="30104">
-                    <level>0</level>
-                    <default>select</default>
-                    <constraints>
-                        <options>
-                            <option label="30105">select</option>
-                            <option label="4K">4K</option>
-                            <option label="2K">2K</option>
-                            <option label="1080p Ultra">1080p Ultra</option>
-                            <option label="1080p">1080p</option>
-                            <option label="720p">720p</option>
-                            <option label="480p">480p</option>
-                            <option label="360p">360p</option>
-                        </options>
-                    </constraints>
-                </setting>
-                <setting id="translator" type="string" label="30106">
-                    <level>0</level>
-                    <default>select</default>
-                    <constraints>
-                        <options>
-                            <option label="30107">select</option>
-                            <option label="30108">default</option>
-                        </options>
-                    </constraints>
-                </setting>
-                <setting id="description" type="boolean" label="30109">
-                    <level>0</level>
-                    <default>true</default>
-                </setting>
-            </group>
-        </category>
-        <category id="account" label="30120">
-            <group id="2">
-                <setting id="auth_enabled" type="boolean" label="30121">
-                    <level>0</level>
-                    <default>false</default>
-                </setting>
-                <setting id="username" type="string" label="30122" enable="eq(-1,true)">
-                    <level>0</level>
-                    <default></default>
-                </setting>
-                <setting id="password" type="string" label="30123" option="hidden" enable="eq(-2,true)">
-                    <level>0</level>
-                    <default></default>
-                </setting>
-                <setting id="login_action" type="action" label="30124" enable="eq(-3,true)">
-                    <level>0</level>
-                    <data>RunPlugin(plugin://plugin.video.hdrezka.tv/?mode=login_action)</data>
-                </setting>
-            </group>
-        </category>
-        <category id="proxy" label="30140">
-            <group id="3">
-                <setting id="use_proxy" type="boolean" label="30141">
-                    <level>0</level>
-                    <default>false</default>
-                </setting>
-                <setting id="protocol" type="string" label="30142" enable="eq(-1,true)">
-                    <level>0</level>
-                    <default>http</default>
-                    <constraints>
-                        <options>
-                            <option label="HTTP / HTTPS">http</option>
-                            <option label="SOCKS5">socks5</option>
-                        </options>
-                    </constraints>
-                </setting>
-                <setting id="proxy_url" type="string" label="30143" help="30144" enable="eq(-2,true)">
-                    <level>0</level>
-                    <default></default>
-                </setting>
-            </group>
-        </category>
-    </section>
+<settings>
+    <category label="Основные">
+        <setting id="domain" type="text" label="Адрес сайта / зеркало" default="kinopub.me"/>
+        <setting id="dom_protocol" type="labelenum" label="Протокол" values="https|http" default="https"/>
+        <setting id="quality" type="labelenum" label="Качество видео" values="select|360p|480p|720p|1080p|1080p Ultra|2K|4K" default="select"/>
+        <setting id="translator" type="labelenum" label="Озвучка / Перевод" values="select|default" default="select"/>
+        <setting id="description" type="bool" label="Загружать описание и рейтинг" default="true"/>
+    </category>
+    <category label="Аккаунт HDRezka">
+        <setting id="auth_enabled" type="bool" label="Включить авторизацию" default="false"/>
+        <setting id="username" type="text" label="Логин или E-mail" default="" enable="eq(-1,true)"/>
+        <setting id="password" type="text" option="hidden" label="Пароль" default="" enable="eq(-2,true)"/>
+        <setting id="login_action" type="action" label="Проверить авторизацию / Войти" action="RunPlugin(plugin://plugin.video.hdrezka.tv/?mode=login_action)" enable="eq(-3,true)"/>
+    </category>
+    <category label="Прокси">
+        <setting id="use_proxy" type="bool" label="Использовать прокси" default="false"/>
+        <setting id="protocol" type="labelenum" label="Тип прокси" values="http|socks5" default="http" enable="eq(-1,true)"/>
+        <setting id="proxy_url" type="text" label="Адрес прокси (host:port или user:pass@host:port)" default="" enable="eq(-2,true)"/>
+    </category>
 </settings>

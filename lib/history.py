@@ -56,3 +56,4 @@ def clear_history():
             os.remove(fpath)
     except Exception as e:
         log(f"Error clearing search history: {e}")
+

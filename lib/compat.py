@@ -110,3 +110,4 @@ def set_art(item, art_dict):
             item.setIconImage(cleaned["icon"])
         if "thumb" in cleaned:
             item.setThumbnailImage(cleaned["thumb"])
+
