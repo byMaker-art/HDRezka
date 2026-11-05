@@ -1,4 +1,85 @@
+# ==========================================
+# Confidential Data, Credentials & Secrets
+# ==========================================
+*.cookie
+*.cookies
+*.session
+cookies.json
+auth.json
+credentials.json
+*.env
+*.env.*
+.env
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+
+# Kodi userdata & runtime profiles
+userdata/
+addon_data/
+*.db
+*.db-shm
+*.db-wal
+
+# ==========================================
+# Python Runtime & Caches
+# ==========================================
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing & Coverage
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ==========================================
+# OS Generated Files
+# ==========================================
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ==========================================
+# IDE & Editors
+# ==========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ==========================================
+# Logs & Temporary Files
+# ==========================================
+*.log
+scratch/
+test_scratch*.py
