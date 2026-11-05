@@ -287,7 +287,21 @@ class HdrezkaTV:
 
         mode = params.get('mode')
         if mode == 'play':
-            self.play(params.get('url'))
+            play_info = None
+            if params.get('post_id'):
+                play_info = {
+                    'post_id': params.get('post_id'),
+                    'translator_id': params.get('translator_id'),
+                    'season': params.get('season'),
+                    'episode': params.get('episode')
+                }
+            self.play(params.get('url'), play_info=play_info, title=urllib.parse.unquote_plus(params.get('title') or ''))
+        elif mode == 'logout':
+            actions.logout(self)
+            return
+        elif mode == 'authorize':
+            actions.authorize(self)
+            return
         elif mode == 'play_episode':
             self.play_episode(
                 params.get('url'),
@@ -502,7 +516,12 @@ class HdrezkaTV:
                     break
             else:
                 film_title = f"{title} - [COLOR=orange]{name}[/COLOR]"
-                item_uri = router.build_uri('play', url=url)
+                play_params = {'url': url, 'title': title}
+                if play_info:
+                    for k in ('post_id', 'translator_id', 'season', 'episode'):
+                        if play_info.get(k) is not None:
+                            play_params[k] = play_info[k]
+                item_uri = router.build_uri('play', **play_params)
                 item = xbmcgui.ListItem(film_title)
                 item.setArt({'icon': image})
                 item.setInfo(
@@ -1278,9 +1297,11 @@ class HdrezkaTV:
 def main():
     plugin = HdrezkaTV()
 
-    action = sys.argv[2]
+    action = sys.argv[2] if len(sys.argv) > 2 else (sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].isdigit() else '')
     if action == 'authorize':
         actions.authorize(plugin)
+    elif action == 'logout':
+        actions.logout(plugin)
     elif action == 'external_config_update':
         actions.external_config_update(plugin)
     else:

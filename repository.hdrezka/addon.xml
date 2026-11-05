@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="repository.hdrezka" name="HDRezka Repository" version="1.0.0" provider-name="byMaker-art">
+    <extension point="xbmc.addon.repository" name="HDRezka Repository">
+        <dir minversion="18.9.0">
+            <info>https://raw.githubusercontent.com/byMaker-art/HDRezka/main/repo/addons.xml</info>
+            <checksum>https://raw.githubusercontent.com/byMaker-art/HDRezka/main/repo/addons.xml.md5</checksum>
+            <datadir zip="true">https://raw.githubusercontent.com/byMaker-art/HDRezka/main/repo/zips/</datadir>
+        </dir>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <summary>Репозиторий для автоматического обновления HDRezka</summary>
+        <description>Позволяет автоматически обновлять дополнение HDRezka через интернет прямо в Kodi без использования флешек.</description>
+        <platform>all</platform>
+        <assets>
+            <icon>icon.png</icon>
+        </assets>
+    </extension>
+</addon>

@@ -27,7 +27,24 @@ def authorize(plugin):
         cookies['hdmbbs'] = '1'
 
         plugin.addon.setSetting('cookies', dump_cookies(cookies))
-        xbmcgui.Dialog().notification('Success', 'Authorization completed', xbmcgui.NOTIFICATION_INFO)
+        xbmcgui.Dialog().notification('HDRezka', 'Авторизация успешна', xbmcgui.NOTIFICATION_INFO)
+
+
+def logout(plugin):
+    log('*** logout')
+
+    with busy_dialog():
+        try:
+            try:
+                plugin.make_response('POST', '/ajax/logout/', data={})
+            except Exception as ex:
+                log(f'logout server request ex: {ex}')
+            plugin.session.cookies.clear()
+            plugin.addon.setSetting('cookies', '')
+            xbmcgui.Dialog().notification('HDRezka', 'Вы вышли из аккаунта', xbmcgui.NOTIFICATION_INFO)
+        except Exception as ex:
+            log(f'logout fault ex: {ex}')
+            xbmcgui.Dialog().notification('HDRezka', 'Ошибка при выходе из аккаунта', xbmcgui.NOTIFICATION_ERROR)
 
 
 def external_config_update(plugin):

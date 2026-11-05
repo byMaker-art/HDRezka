@@ -24,7 +24,7 @@ def build():
     zip_name = f"{ADDON_ID}-{version}.zip"
     zip_path = os.path.join(BASE_DIR, zip_name)
 
-    exclude_dirs = {".git", ".idea", "__pycache__", ".vscode"}
+    exclude_dirs = {".git", ".idea", "__pycache__", ".vscode", "repo", "repository.hdrezka"}
     exclude_exts = {".pyc", ".pyo", ".DS_Store", ".zip"}
 
     print(f"Building {zip_name}...")
@@ -34,7 +34,7 @@ def build():
             for file in files:
                 if any(file.endswith(ext) for ext in exclude_exts):
                     continue
-                if file in ("build.py", zip_name, ".gitignore"):
+                if file in ("build.py", "build_repo.py", zip_name, ".gitignore"):
                     continue
 
                 abs_path = os.path.join(root, file)

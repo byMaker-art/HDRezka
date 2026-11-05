@@ -17,6 +17,7 @@
         <setting id="cookies" type="text" visible="false" label="Authorization cookies" />
         <setting type="sep"/>
         <setting type="action" label="Authorize" action="RunScript(plugin.video.hdrezka.tv, 0, authorize)" />
+        <setting type="action" label="Logout" action="RunScript(plugin.video.hdrezka.tv, 0, logout)" />
     </category>
     <category label="Proxy settings">
         <setting id="use_proxy" type="bool" label="Use proxy settings" default="false" />
