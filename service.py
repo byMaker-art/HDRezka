@@ -27,7 +27,9 @@ if __name__ == '__main__':
     while not monitor.abortRequested():
         if player.current_video and not player.is_paused and player.isPlaying():
             try:
-                player.last_position = player.getTime()
+                pos = player.getTime()
+                if pos > 0:
+                    player.last_position = pos
                 total_time = player.getTotalTime()
                 if total_time > 0 and (not player.current_video.get('duration') or player.current_video['duration'] <= 0):
                     player.current_video['duration'] = total_time
@@ -38,5 +40,5 @@ if __name__ == '__main__':
                     last_autosave = time.time()
             except Exception as ex:
                 log('service fault getTime ex: %s' % ex)
-        if monitor.waitForAbort(10):
+        if monitor.waitForAbort(1):
             break

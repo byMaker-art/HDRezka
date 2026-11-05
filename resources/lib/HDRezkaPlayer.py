@@ -22,19 +22,28 @@ class HDRezkaPlayer(xbmc.Player):
         self.is_paused = False
 
     def onAVStarted(self):
-        item = self.getPlayingItem()
-        if not item:
+        item = None
+        for _ in range(5):
+            item = self.getPlayingItem()
+            if item and item.getProperty('addon_id') == self.addon_id and item.getProperty('post_id'):
+                break
+            xbmc.sleep(200)
+
+        if not item or item.getProperty('addon_id') != self.addon_id or not item.getProperty('post_id'):
             return
-        if item.getProperty('addon_id') != self.addon_id:
-            return
-        # the tag may not be ready the very same tick (ours only, no stall on foreign video)
-        xbmc.sleep(1000)
+
+        duration = 0
+        try:
+            duration = self.getTotalTime()
+        except Exception:
+            pass
+
         self.current_video = {
             'post_id': item.getProperty('post_id'),
-            'translator_id': item.getProperty('translator_id'),
-            'season': item.getProperty('season'),
-            'episode': item.getProperty('episode'),
-            'duration': self.getTotalTime(),
+            'translator_id': item.getProperty('translator_id') or '0',
+            'season': item.getProperty('season') or '0',
+            'episode': item.getProperty('episode') or '0',
+            'duration': duration,
             'start_time': time.time(),
         }
         self.last_position = 0
@@ -42,6 +51,12 @@ class HDRezkaPlayer(xbmc.Player):
 
     def onPlayBackStopped(self):
         if self.current_video:
+            try:
+                pos = self.getTime()
+                if pos > 0:
+                    self.last_position = pos
+            except Exception:
+                pass
             self._send_stats_to_server('stopped')
 
     def onPlayBackEnded(self):
@@ -50,7 +65,13 @@ class HDRezkaPlayer(xbmc.Player):
 
     def onPlayBackPaused(self):
         self.is_paused = True
-        self.last_position = self.getTime()
+        try:
+            pos = self.getTime()
+            if pos > 0:
+                self.last_position = pos
+        except Exception:
+            pass
+        self._send_intermediate_save()
 
     def onPlayBackResumed(self):
         self.is_paused = False
@@ -59,13 +80,13 @@ class HDRezkaPlayer(xbmc.Player):
         video, self.current_video = self.current_video, None
         if not video or not video.get('post_id'):
             return
-        duration = int(video.get('duration') or 0)
-        current_time = int(self.last_position) if status == 'stopped' else duration
+        duration = int(float(video.get('duration') or 0))
+        current_time = int(float(self.last_position or 0)) if status == 'stopped' else duration
         data = {
             'post_id': video['post_id'],
-            'translator_id': video['translator_id'],
-            'season': video['season'],
-            'episode': video['episode'],
+            'translator_id': video.get('translator_id') or '0',
+            'season': video.get('season') or '0',
+            'episode': video.get('episode') or '0',
             'current_time': current_time,
             'duration': duration,
         }
@@ -79,11 +100,11 @@ class HDRezkaPlayer(xbmc.Player):
             return
         data = {
             'post_id': self.current_video['post_id'],
-            'translator_id': self.current_video['translator_id'],
-            'season': self.current_video['season'],
-            'episode': self.current_video['episode'],
-            'current_time': int(self.last_position),
-            'duration': int(self.current_video.get('duration') or 0),
+            'translator_id': self.current_video.get('translator_id') or '0',
+            'season': self.current_video.get('season') or '0',
+            'episode': self.current_video.get('episode') or '0',
+            'current_time': int(float(self.last_position or 0)),
+            'duration': int(float(self.current_video.get('duration') or 0)),
         }
         log('HDRezkaPlayer periodic autosave: %s' % data)
         self._send_http_post(data)
